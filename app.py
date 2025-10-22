@@ -18,7 +18,15 @@ from flask import (
 )
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.path.join(BASE_DIR, "league.db")
+
+# Use persistent disk location on Render, local directory in development
+if os.path.exists("/opt/render/project/src/data"):
+    # Production: use persistent disk mount
+    DATABASE = "/opt/render/project/src/data/league.db"
+else:
+    # Development: use local directory
+    DATABASE = os.path.join(BASE_DIR, "league.db")
+
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 if not ADMIN_PASSWORD:
     raise RuntimeError("ADMIN_PASSWORD environment variable must be set")
