@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: cisco-ping-pong-league
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        value: cisco-secure
+    disk:
+      name: league-data
+      mountPath: /opt/render/project/src
+      sizeGB: 1
