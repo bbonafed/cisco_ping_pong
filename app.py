@@ -77,7 +77,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            week INTEGER NOT NULL,
+            week INTEGER,
             player1_id INTEGER,
             player2_id INTEGER,
             game1_p1 INTEGER DEFAULT 0,
@@ -86,9 +86,18 @@ def init_db():
             game2_p2 INTEGER DEFAULT 0,
             game3_p1 INTEGER DEFAULT 0,
             game3_p2 INTEGER DEFAULT 0,
+            game1_score1 INTEGER,
+            game1_score2 INTEGER,
+            game2_score1 INTEGER,
+            game2_score2 INTEGER,
+            game3_score1 INTEGER,
+            game3_score2 INTEGER,
+            score1 INTEGER,
+            score2 INTEGER,
             reported INTEGER DEFAULT 0,
             double_forfeit INTEGER DEFAULT 0,
             playoff INTEGER DEFAULT 0,
+            playoff_round INTEGER,
             round_name TEXT,
             match_number INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -114,6 +123,10 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_matches_players ON matches(player1_id, player2_id)"
     )
 
+    # Ensure all columns exist (for schema migrations)
+    ensure_match_columns(db)
+    ensure_default_settings(db)
+
     db.commit()
 
 
@@ -126,9 +139,12 @@ def ensure_db_ready():
 
 
 def ensure_match_columns(db):
+    """Migrate old database schemas to include all necessary columns."""
     existing = {
         row["name"] for row in db.execute("PRAGMA table_info(matches)").fetchall()
     }
+    
+    # Define all columns that might be missing from older schemas
     definitions = {
         "game1_score1": "INTEGER",
         "game1_score2": "INTEGER",
@@ -136,11 +152,21 @@ def ensure_match_columns(db):
         "game2_score2": "INTEGER",
         "game3_score1": "INTEGER",
         "game3_score2": "INTEGER",
-        "double_forfeit": "INTEGER NOT NULL DEFAULT 0",
+        "score1": "INTEGER",
+        "score2": "INTEGER",
+        "double_forfeit": "INTEGER DEFAULT 0",
+        "playoff_round": "INTEGER",
     }
+    
     for column, ddl in definitions.items():
         if column not in existing:
-            db.execute(f"ALTER TABLE matches ADD COLUMN {column} {ddl}")
+            try:
+                db.execute(f"ALTER TABLE matches ADD COLUMN {column} {ddl}")
+                print(f"✅ Added column: {column}")
+            except Exception as e:
+                print(f"⚠️ Could not add column {column}: {e}")
+    
+    db.commit()
 
 
 def ensure_default_settings(db):
