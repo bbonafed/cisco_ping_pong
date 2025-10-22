@@ -14,3 +14,8 @@ wheels/
 
 # Database
 league.db
+league_backup_*.db
+*.db
+
+# Database recovery scripts
+recover_database.sh

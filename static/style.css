@@ -91,8 +91,14 @@ a:focus {
 
 .brand {
     display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
+    align-items: center;
+    gap: 1rem;
+}
+
+.brand-logo {
+    height: 60px;
+    width: auto;
+    object-fit: contain;
 }
 
 .brand-mark {
@@ -498,6 +504,14 @@ textarea:focus {
         flex-direction: column;
         gap: 1.25rem;
         align-items: flex-start;
+    }
+
+    .brand-logo {
+        height: 50px;
+    }
+
+    .brand-mark {
+        font-size: 1.2rem;
     }
 
     .primary-nav {
