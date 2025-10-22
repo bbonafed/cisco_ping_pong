@@ -1076,22 +1076,22 @@ def auto_start_playoffs_if_ready(db):
     if existing:
         return
     total_regular = db.execute(
-        "SELECT COUNT(*) FROM matches WHERE playoff = 0"
-    ).fetchone()[0]
+        "SELECT COUNT(*) as count FROM matches WHERE playoff = 0"
+    ).fetchone()["count"]
     if total_regular == 0:
         return
-    max_week = db.execute("SELECT MAX(week) FROM matches WHERE playoff = 0").fetchone()[
-        0
-    ]
+    max_week = db.execute(
+        "SELECT MAX(week) as max_week FROM matches WHERE playoff = 0"
+    ).fetchone()["max_week"]
     if not max_week or max_week < MAX_WEEKS:
         return
     pending = db.execute(
         """
-        SELECT COUNT(*) FROM matches
+        SELECT COUNT(*) as count FROM matches
         WHERE playoff = 0 AND (reported = 0 OR reported IS NULL)
           AND player2_id IS NOT NULL
         """
-    ).fetchone()[0]
+    ).fetchone()["count"]
     if pending == 0:
         create_playoff_bracket(db)
 
