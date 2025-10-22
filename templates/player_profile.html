@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}{{ player.first_name }} {{ player.last_name }} - Profile{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <div>
+            <h1 class="card-title">{{ player.first_name }} {{ player.last_name }}</h1>
+            <p class="card-subtitle">CEC ID: {{ player.cec_id }}</p>
+            {% if rank %}
+            <p class="card-subtitle">Current Rank: <strong style="color: var(--cisco-cyan);">#{{ rank }}</strong></p>
+            {% endif %}
+        </div>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">← Back to Standings</a>
+    </div>
+
+    <!-- Stats Overview -->
+    <div class="card-section">
+        <h2 class="card-title" style="font-size: 1.1rem; margin-bottom: 1rem;">Season Statistics</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Wins</div>
+                <div class="stat-value positive">{{ stats.total_wins }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Losses</div>
+                <div class="stat-value negative">{{ stats.total_losses }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value">{{ stats.win_percentage }}%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Matches</div>
+                <div class="stat-value">{{ stats.total_matches }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Points Scored</div>
+                <div class="stat-value">{{ stats.total_points_scored }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Points Against</div>
+                <div class="stat-value">{{ stats.total_points_against }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Point Diff</div>
+                <div class="stat-value {% if stats.point_diff > 0 %}positive{% elif stats.point_diff < 0 %}negative{% endif %}">
+                    {% if stats.point_diff > 0 %}+{% endif %}{{ stats.point_diff }}
+                </div>
+            </div>
+            {% if stats.playoff_wins > 0 or stats.playoff_losses > 0 %}
+            <div class="stat-card">
+                <div class="stat-label">Playoff Record</div>
+                <div class="stat-value">{{ stats.playoff_wins }}-{{ stats.playoff_losses }}</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Match History -->
+    <div class="card-section">
+        <h2 class="card-title" style="font-size: 1.1rem; margin-bottom: 1rem;">Match History</h2>
+        {% if match_history %}
+        <div class="match-history">
+            {% for match in match_history %}
+            <div class="match-history-item {% if match.is_win %}win{% else %}loss{% endif %}">
+                <div class="match-info">
+                    <div class="match-opponent">
+                        vs.
+                        {% if match.opponent_id %}
+                        <a href="{{ url_for('player_profile', player_id=match.opponent_id) }}" class="player-link">
+                            {{ match.opponent_name }}
+                        </a>
+                        {% else %}
+                        {{ match.opponent_name }}
+                        {% endif %}
+                    </div>
+                    <div class="match-detail">
+                        {% if match.playoff %}
+                            {% if match.playoff_round == 1 %}Quarterfinals
+                            {% elif match.playoff_round == 2 %}Semifinals
+                            {% elif match.playoff_round == 3 %}Finals
+                            {% else %}Playoff Round {{ match.playoff_round }}{% endif %}
+                        {% elif match.week %}
+                            Week {{ match.week }}
+                        {% endif %}
+                        {% if match.score_summary %}
+                        • {{ match.score_summary }}
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="match-result {% if match.is_win %}positive{% else %}negative{% endif %}">
+                    {{ match.result }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>No match history yet. Check back after matches are reported!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -15,7 +15,11 @@
     </div>
     {% if champion %}
         <div class="card-grid">
-            <div class="tagline-highlight">{{ champion.first_name }} {{ champion.last_name }}</div>
+            <div class="tagline-highlight">
+                <a href="{{ url_for('player_profile', player_id=champion.id) }}" class="player-link" style="color: var(--cisco-cyan); font-size: 1.3rem;">
+                    🏆 {{ champion.first_name }} {{ champion.last_name }}
+                </a>
+            </div>
             <div class="card-meta">Congratulations to our season champion!</div>
         </div>
     {% endif %}
@@ -31,7 +35,7 @@
             </div>
         </div>
         <div class="table-wrapper">
-            <table class="table">
+            <table class="table table-responsive">
                 <thead>
                     <tr>
                         <th>Match</th>
@@ -42,24 +46,36 @@
                 <tbody>
                     {% for match in round_matches %}
                     <tr>
-                        <td>{{ match.player1_name }} vs {{ match.is_bye and 'BYE' or match.player2_name }}</td>
-                        <td>
+                        <td data-label="Match">
+                            <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
+                                {{ match.player1_name }}
+                            </a>
+                            vs
                             {% if match.is_bye %}
-                                <span class="chip chip-neutral">Auto-Advance</span>
+                                <strong>BYE</strong>
+                            {% else %}
+                                <a href="{{ url_for('player_profile', player_id=match.player2_id) }}" class="player-link">
+                                    {{ match.player2_name }}
+                                </a>
+                            {% endif %}
+                        </td>
+                        <td data-label="Status">
+                            {% if match.is_bye %}
+                                <span class="match-status match-status-bye">Auto-Advance</span>
                             {% elif match.double_forfeit %}
-                                <span class="chip chip-danger">Double Forfeit</span>
+                                <span class="match-status match-status-forfeit">Double Forfeit</span>
                             {% elif match.reported %}
-                                <span class="chip chip-success">Reported</span>
+                                <span class="match-status match-status-reported">✓ Reported</span>
                                 {% if match.score_summary %}
                                     <div class="card-meta">{{ match.score_summary }}</div>
                                 {% endif %}
                             {% else %}
-                                <span class="chip chip-warning">Pending</span>
+                                <span class="match-status match-status-pending">⏳ Pending</span>
                             {% endif %}
                         </td>
-                        <td class="table-actions">
+                        <td data-label="Actions" class="table-actions">
                             {% if match.can_report %}
-                                <a class="btn btn-secondary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'Edit Score' if match.reported else 'Report Score' }}</a>
+                                <a class="btn btn-primary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'Edit Score' if match.reported else 'Report Score' }}</a>
                             {% else %}
                                 &mdash;
                             {% endif %}

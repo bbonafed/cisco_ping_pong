@@ -499,6 +499,259 @@ textarea:focus {
     color: rgba(159, 233, 255, 0.85);
 }
 
+/* Loading Spinner */
+.spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    border-top-color: var(--cisco-cyan);
+    animation: spinner 0.8s linear infinite;
+}
+
+.spinner-large {
+    width: 40px;
+    height: 40px;
+    border-width: 4px;
+}
+
+@keyframes spinner {
+    to { transform: rotate(360deg); }
+}
+
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.loading-overlay.active {
+    display: flex;
+}
+
+.loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 2rem;
+    background: rgba(1, 27, 51, 0.95);
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.loading-text {
+    color: var(--cisco-white);
+    font-weight: 500;
+}
+
+/* Match Status Badges */
+.match-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.match-status-reported {
+    background: rgba(0, 166, 118, 0.18);
+    color: #8effd7;
+    border: 1px solid rgba(0, 166, 118, 0.3);
+}
+
+.match-status-pending {
+    background: rgba(255, 179, 71, 0.18);
+    color: #ffe1b7;
+    border: 1px solid rgba(255, 179, 71, 0.3);
+}
+
+.match-status-upcoming {
+    background: rgba(0, 188, 235, 0.14);
+    color: #9fe9ff;
+    border: 1px solid rgba(0, 188, 235, 0.25);
+}
+
+.match-status-bye {
+    background: rgba(91, 107, 127, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(91, 107, 127, 0.4);
+}
+
+.match-status-forfeit {
+    background: rgba(255, 92, 92, 0.18);
+    color: #ffc2c2;
+    border: 1px solid rgba(255, 92, 92, 0.3);
+}
+
+/* Player Search Filter */
+.search-box {
+    position: relative;
+    margin-bottom: var(--gap-sm);
+}
+
+.search-box input {
+    padding-left: 2.5rem;
+}
+
+.search-icon {
+    position: absolute;
+    left: 0.85rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+}
+
+/* Enhanced Standings Table */
+.standings-table {
+    background: linear-gradient(135deg, rgba(0, 188, 235, 0.05) 0%, rgba(0, 80, 115, 0.08) 100%);
+}
+
+.standings-table thead th {
+    background: rgba(0, 188, 235, 0.12);
+    color: var(--cisco-white);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.85rem;
+}
+
+.standings-table tbody tr {
+    transition: all 0.2s ease;
+}
+
+.standings-table tbody tr:hover {
+    background: rgba(0, 188, 235, 0.15);
+    transform: scale(1.01);
+}
+
+.standings-table .rank-cell {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--cisco-cyan);
+}
+
+.standings-table .player-name {
+    font-weight: 600;
+    color: var(--cisco-white);
+}
+
+.standings-table .player-name:hover {
+    color: var(--cisco-cyan);
+    cursor: pointer;
+}
+
+/* Player Profile Link Styling */
+.player-link {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.player-link:hover {
+    color: var(--cisco-cyan);
+    text-decoration: none;
+}
+
+/* Stats Grid for Player Profiles */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--gap-sm);
+    margin-top: var(--gap-sm);
+}
+
+.stat-card {
+    background: rgba(3, 45, 78, 0.6);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.65);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--cisco-cyan);
+}
+
+.stat-value.positive {
+    color: #8effd7;
+}
+
+.stat-value.negative {
+    color: #ffc2c2;
+}
+
+/* Match History List */
+.match-history {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.match-history-item {
+    background: rgba(3, 45, 78, 0.5);
+    padding: 1rem;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.match-history-item.win {
+    border-left: 4px solid #8effd7;
+}
+
+.match-history-item.loss {
+    border-left: 4px solid #ffc2c2;
+}
+
+.match-info {
+    flex: 1;
+}
+
+.match-opponent {
+    font-weight: 600;
+    color: var(--cisco-white);
+}
+
+.match-detail {
+    font-size: 0.9rem;
+    color: rgba(255, 255, 255, 0.65);
+    margin-top: 0.25rem;
+}
+
+.match-result {
+    font-weight: 700;
+    font-size: 1.1rem;
+}
+
+/* Mobile Responsive Tables */
 @media (max-width: 820px) {
     .app-header__inner {
         flex-direction: column;
@@ -527,5 +780,60 @@ textarea:focus {
         flex-direction: column;
         gap: 0.5rem;
         text-align: center;
+    }
+
+    /* Stack table on mobile for better readability */
+    .table-responsive {
+        display: block;
+    }
+
+    .table-responsive thead {
+        display: none;
+    }
+
+    .table-responsive tbody,
+    .table-responsive tr,
+    .table-responsive td {
+        display: block;
+        width: 100%;
+    }
+
+    .table-responsive tr {
+        margin-bottom: 1rem;
+        background: rgba(3, 35, 62, 0.85);
+        border-radius: var(--radius-md);
+        padding: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .table-responsive td {
+        text-align: right;
+        padding: 0.5rem 0;
+        position: relative;
+        padding-left: 50%;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .table-responsive td:last-child {
+        border-bottom: none;
+    }
+
+    .table-responsive td::before {
+        content: attr(data-label);
+        position: absolute;
+        left: 0;
+        width: 45%;
+        padding-left: 0.5rem;
+        font-weight: 600;
+        text-align: left;
+        color: rgba(255, 255, 255, 0.7);
+    }
+
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .stat-value {
+        font-size: 1.5rem;
     }
 }

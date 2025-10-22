@@ -39,8 +39,13 @@
         </div>
     </div>
     {% if players %}
+        <!-- Search Box -->
+        <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="player-search" class="no-loading" placeholder="Search players..." autocomplete="off">
+        </div>
         <div class="table-wrapper">
-            <table class="table">
+            <table class="table table-responsive">
                 <thead>
                     <tr>
                         <th>Name</th>
@@ -50,10 +55,14 @@
                 </thead>
                 <tbody>
                     {% for player in players %}
-                    <tr>
-                        <td>{{ player.first_name }} {{ player.last_name }}</td>
-                        <td>{{ player.cec_id }}</td>
-                        <td>{{ player.created_at }}</td>
+                    <tr class="searchable-row">
+                        <td data-label="Name">
+                            <a href="{{ url_for('player_profile', player_id=player.id) }}" class="player-link">
+                                {{ player.first_name }} {{ player.last_name }}
+                            </a>
+                        </td>
+                        <td data-label="CEC ID">{{ player.cec_id }}</td>
+                        <td data-label="Joined">{{ player.created_at.strftime('%b %d, %Y') if player.created_at else 'N/A' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

@@ -491,7 +491,7 @@ def signup():
         return redirect(url_for("signup"))
 
     players = db.execute(
-        "SELECT first_name, last_name, cec_id, created_at FROM players ORDER BY created_at ASC"
+        "SELECT id, first_name, last_name, cec_id, created_at FROM players ORDER BY created_at ASC"
     ).fetchall()
     return render_template("signup.html", players=players)
 
@@ -671,6 +671,143 @@ def playoffs():
         rounds=grouped,
         preview_rounds=preview_rounds,
         champion=champion,
+    )
+
+
+@app.route("/player/<int:player_id>")
+def player_profile(player_id):
+    db = get_db()
+
+    # Get player info
+    player = db.execute(
+        "SELECT id, first_name, last_name, cec_id, created_at FROM players WHERE id = %s",
+        (player_id,),
+    ).fetchone()
+
+    if not player:
+        abort(404)
+
+    # Calculate individual stats
+    matches = db.execute(
+        """
+        SELECT m.*,
+               p1.first_name || ' ' || p1.last_name AS player1_name,
+               p2.first_name || ' ' || p2.last_name AS player2_name
+        FROM matches m
+        LEFT JOIN players p1 ON p1.id = m.player1_id
+        LEFT JOIN players p2 ON p2.id = m.player2_id
+        WHERE (m.player1_id = %s OR m.player2_id = %s)
+          AND m.reported = 1
+          AND m.player2_id IS NOT NULL
+        ORDER BY m.created_at DESC
+        """,
+        (player_id, player_id),
+    ).fetchall()
+
+    # Calculate stats
+    total_wins = 0
+    total_losses = 0
+    total_points_scored = 0
+    total_points_against = 0
+    playoff_wins = 0
+    playoff_losses = 0
+    match_history = []
+
+    for match in matches:
+        is_player1 = match["player1_id"] == player_id
+        opponent_id = match["player2_id"] if is_player1 else match["player1_id"]
+        opponent_name = match["player2_name"] if is_player1 else match["player1_name"]
+
+        if get_value(match, "double_forfeit"):
+            total_losses += 1
+            if match["playoff"]:
+                playoff_losses += 1
+            match_history.append(
+                {
+                    "opponent_name": opponent_name,
+                    "opponent_id": opponent_id,
+                    "result": "Double Forfeit",
+                    "is_win": False,
+                    "week": match["week"],
+                    "playoff": match["playoff"],
+                    "playoff_round": match.get("playoff_round"),
+                    "score_summary": "0 - 0",
+                }
+            )
+            continue
+
+        scores = extract_game_scores(match)
+        if scores:
+            wins1, wins2 = calculate_game_wins(scores)
+            is_win = (is_player1 and wins1 > wins2) or (
+                not is_player1 and wins2 > wins1
+            )
+
+            # Count match win/loss
+            if is_win:
+                total_wins += 1
+                if match["playoff"]:
+                    playoff_wins += 1
+            else:
+                total_losses += 1
+                if match["playoff"]:
+                    playoff_losses += 1
+
+            # Calculate points
+            for score1, score2 in scores:
+                if is_player1:
+                    total_points_scored += score1
+                    total_points_against += score2
+                else:
+                    total_points_scored += score2
+                    total_points_against += score1
+
+            # Build match history entry
+            score_summary = format_match_summary(match)
+            match_history.append(
+                {
+                    "opponent_name": opponent_name,
+                    "opponent_id": opponent_id,
+                    "result": "Win" if is_win else "Loss",
+                    "is_win": is_win,
+                    "week": match["week"],
+                    "playoff": match["playoff"],
+                    "playoff_round": match.get("playoff_round"),
+                    "score_summary": score_summary,
+                }
+            )
+
+    point_diff = total_points_scored - total_points_against
+    win_percentage = (
+        (total_wins / (total_wins + total_losses) * 100)
+        if (total_wins + total_losses) > 0
+        else 0
+    )
+
+    stats = {
+        "total_wins": total_wins,
+        "total_losses": total_losses,
+        "win_percentage": round(win_percentage, 1),
+        "total_points_scored": total_points_scored,
+        "total_points_against": total_points_against,
+        "point_diff": point_diff,
+        "playoff_wins": playoff_wins,
+        "playoff_losses": playoff_losses,
+        "total_matches": total_wins + total_losses,
+    }
+
+    # Get current rank
+    rankings = calculate_rankings(db, include_playoffs=True)
+    player_rank = next(
+        (r["rank"] for r in rankings if r["player_id"] == player_id), None
+    )
+
+    return render_template(
+        "player_profile.html",
+        player=player,
+        stats=stats,
+        match_history=match_history,
+        rank=player_rank,
     )
 
 
