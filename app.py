@@ -19,7 +19,9 @@ from flask import (
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.path.join(BASE_DIR, "league.db")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cisco-secure")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD:
+    raise RuntimeError("ADMIN_PASSWORD environment variable must be set")
 MAX_WEEKS = 8
 MAX_GAMES = 3
 SETTINGS_CURRENT_WEEK = "current_week"

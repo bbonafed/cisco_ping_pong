@@ -26,20 +26,28 @@ A Flask-based web application for managing an 8-week round-robin ping pong leagu
    pip install -r requirements.txt
    ```
 
-2. Run the application:
+2. Set required environment variables:
+   ```bash
+   export ADMIN_PASSWORD="your-secure-password"
+   export FLASK_SECRET_KEY="your-secret-key"
+   ```
+
+3. Run the application:
    ```bash
    python app.py
    ```
 
-3. Access at `http://localhost:5000`
+4. Access at `http://localhost:5000`
 
 ## Admin Access
 
-Default admin password: `cisco-secure` (configurable via `ADMIN_PASSWORD` environment variable)
+Admin password must be set via the `ADMIN_PASSWORD` environment variable. There is no default password for security reasons.
 
 ## Deployment
 
 Configured for automatic deployment to Render.com via `render.yaml`.
+
+**Important:** You must manually set the `ADMIN_PASSWORD` environment variable in Render's dashboard after deployment. The `FLASK_SECRET_KEY` will be auto-generated.
 
 ## License
 

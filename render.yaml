@@ -10,7 +10,7 @@ services:
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: ADMIN_PASSWORD
-        value: cisco-secure
+        sync: false
     disk:
       name: league-data
       mountPath: /opt/render/project/src
