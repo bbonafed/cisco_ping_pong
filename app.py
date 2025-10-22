@@ -209,7 +209,7 @@ def ensure_match_columns(db):
 
 def ensure_default_settings(db):
     db.execute(
-        "INSERT OR IGNORE INTO settings (key, value) VALUES (%s, %s)",
+        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
         (SETTINGS_CURRENT_WEEK, "1"),
     )
 
@@ -228,7 +228,7 @@ def get_current_week(db):
 
 def set_current_week(db, week):
     db.execute(
-        "REPLACE INTO settings (key, value) VALUES (%s, %s)",
+        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (SETTINGS_CURRENT_WEEK, str(week)),
     )
 
@@ -916,7 +916,9 @@ def admin_reset_data():
     db = get_db()
     db.execute("DELETE FROM matches")
     db.execute("DELETE FROM players")
-    db.execute("DELETE FROM sqlite_sequence WHERE name IN ('matches', 'players')")
+    # PostgreSQL SERIAL sequences are automatically managed, no need to reset like sqlite_sequence
+    db.execute("ALTER SEQUENCE players_id_seq RESTART WITH 1")
+    db.execute("ALTER SEQUENCE matches_id_seq RESTART WITH 1")
     set_current_week(db, 1)
     db.commit()
     flash("All league data cleared.", "success")
