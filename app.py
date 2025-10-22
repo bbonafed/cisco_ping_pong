@@ -24,6 +24,9 @@ if not ADMIN_PASSWORD:
     raise RuntimeError("ADMIN_PASSWORD environment variable must be set")
 MAX_WEEKS = 8
 MAX_GAMES = 3
+ADMIN_SESSION_TIMEOUT_MINUTES = (
+    30  # Admin session expires after 30 minutes of inactivity
+)
 SETTINGS_CURRENT_WEEK = "current_week"
 
 app = Flask(__name__)
@@ -32,8 +35,15 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
+        try:
+            g.db = sqlite3.connect(DATABASE)
+            g.db.row_factory = sqlite3.Row
+        except sqlite3.Error as e:
+            # Log the error and raise a more user-friendly exception
+            print(f"Database connection error: {e}")
+            raise RuntimeError(
+                f"Unable to connect to database. Please contact admin. Error: {e}"
+            )
     return g.db
 
 
@@ -48,6 +58,10 @@ app.teardown_appcontext(close_db)
 
 def init_db():
     db = get_db()
+
+    # Enable foreign key constraints (SQLite has them disabled by default)
+    db.execute("PRAGMA foreign_keys = ON")
+
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS players (
@@ -55,27 +69,33 @@ def init_db():
             first_name TEXT NOT NULL,
             last_name TEXT NOT NULL,
             cec_id TEXT NOT NULL UNIQUE,
-            created_at DATETIME NOT NULL
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-        """
+    """
     )
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS matches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            week INTEGER,
+            week INTEGER NOT NULL,
             player1_id INTEGER,
             player2_id INTEGER,
-            score1 INTEGER,
-            score2 INTEGER,
-            reported BOOLEAN NOT NULL DEFAULT 0,
-            playoff BOOLEAN NOT NULL DEFAULT 0,
-            playoff_round INTEGER,
-            created_at DATETIME NOT NULL,
-            FOREIGN KEY(player1_id) REFERENCES players(id),
-            FOREIGN KEY(player2_id) REFERENCES players(id)
+            game1_p1 INTEGER DEFAULT 0,
+            game1_p2 INTEGER DEFAULT 0,
+            game2_p1 INTEGER DEFAULT 0,
+            game2_p2 INTEGER DEFAULT 0,
+            game3_p1 INTEGER DEFAULT 0,
+            game3_p2 INTEGER DEFAULT 0,
+            reported INTEGER DEFAULT 0,
+            double_forfeit INTEGER DEFAULT 0,
+            playoff INTEGER DEFAULT 0,
+            round_name TEXT,
+            match_number INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (player1_id) REFERENCES players (id) ON DELETE CASCADE,
+            FOREIGN KEY (player2_id) REFERENCES players (id) ON DELETE CASCADE
         )
-        """
+    """
     )
     db.execute(
         """
@@ -83,10 +103,17 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         )
-        """
+    """
     )
-    ensure_match_columns(db)
-    ensure_default_settings(db)
+
+    # Create indexes for better query performance
+    db.execute("CREATE INDEX IF NOT EXISTS idx_matches_week ON matches(week)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_matches_playoff ON matches(playoff)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_matches_reported ON matches(reported)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_matches_players ON matches(player1_id, player2_id)"
+    )
+
     db.commit()
 
 
@@ -261,6 +288,10 @@ def parse_best_of_three_scores(form):
             raise ValueError("Scores must be integers.")
         if score1 < 0 or score2 < 0:
             raise ValueError("Scores cannot be negative.")
+        if score1 > 99 or score2 > 99:
+            raise ValueError(
+                f"Unrealistic score in Game {idx}. Scores should be under 100. If this is correct, admin can manually edit."
+            )
         if score1 == score2:
             raise ValueError("Games cannot end in a tie.")
         scores.append((score1, score2))
@@ -320,6 +351,26 @@ def admin_required(view):
         if not session.get("admin_authenticated"):
             flash("Admin login required.", "error")
             return redirect(url_for("admin_login", next=request.path))
+
+        # Check session timeout
+        last_activity = session.get("admin_last_activity")
+        if last_activity:
+            try:
+                last_time = datetime.fromisoformat(last_activity)
+                time_diff = datetime.now(timezone.utc) - last_time
+                if time_diff.total_seconds() > (ADMIN_SESSION_TIMEOUT_MINUTES * 60):
+                    session.clear()
+                    flash(
+                        f"Admin session expired after {ADMIN_SESSION_TIMEOUT_MINUTES} minutes of inactivity. Please login again.",
+                        "error",
+                    )
+                    return redirect(url_for("admin_login", next=request.path))
+            except (ValueError, TypeError):
+                pass
+
+        # Update last activity time
+        session["admin_last_activity"] = datetime.now(timezone.utc).isoformat()
+
         return view(*args, **kwargs)
 
     return wrapped_view
@@ -434,6 +485,15 @@ def report_match(match_id):
             return redirect(url_for("view_schedule", week=match["week"]))
 
     if request.method == "POST":
+        # Check for race condition - match might have been reported since page loaded
+        current_match = db.execute(
+            "SELECT reported, double_forfeit FROM matches WHERE id = ?", (match_id,)
+        ).fetchone()
+
+        if current_match["reported"] and not current_match["double_forfeit"]:
+            flash("This match was already reported by someone else.", "error")
+            return redirect(url_for("view_schedule", week=match.get("week", 1)))
+
         verified = request.form.get("verified") == "true"
         if not verified:
             flash("Both players must verify the result.", "error")
@@ -451,32 +511,46 @@ def report_match(match_id):
             sum(score[1] for score in game_scores),
         )
         padded = game_scores + [(None, None)] * (MAX_GAMES - len(game_scores))
-        db.execute(
-            """
-            UPDATE matches
-            SET score1 = ?, score2 = ?,
-                game1_score1 = ?, game1_score2 = ?,
-                game2_score1 = ?, game2_score2 = ?,
-                game3_score1 = ?, game3_score2 = ?,
-                double_forfeit = 0,
-                reported = 1
-            WHERE id = ?
-            """,
-            (
-                totals[0],
-                totals[1],
-                padded[0][0],
-                padded[0][1],
-                padded[1][0],
-                padded[1][1],
-                padded[2][0],
-                padded[2][1],
-                match_id,
-            ),
-        )
-        db.commit()
-        flash("Match updated.", "success")
-        advance_playoff_winners(db)
+
+        try:
+            # Use WHERE reported = 0 to prevent duplicate reports
+            cursor = db.execute(
+                """
+                UPDATE matches
+                SET score1 = ?, score2 = ?,
+                    game1_score1 = ?, game1_score2 = ?,
+                    game2_score1 = ?, game2_score2 = ?,
+                    game3_score1 = ?, game3_score2 = ?,
+                    double_forfeit = 0,
+                    reported = 1
+                WHERE id = ? AND reported = 0
+                """,
+                (
+                    totals[0],
+                    totals[1],
+                    padded[0][0],
+                    padded[0][1],
+                    padded[1][0],
+                    padded[1][1],
+                    padded[2][0],
+                    padded[2][1],
+                    match_id,
+                ),
+            )
+
+            # Check if the update actually happened
+            if cursor.rowcount == 0:
+                flash("Match was already reported. No changes made.", "error")
+                return redirect(url_for("view_schedule", week=match.get("week", 1)))
+
+            db.commit()
+            flash("Match updated.", "success")
+            advance_playoff_winners(db)
+        except Exception as e:
+            db.rollback()
+            flash(f"Error saving match: {str(e)}", "error")
+            return redirect(url_for("report_match", match_id=match_id))
+
         return redirect(url_for("index"))
 
     existing_scores = extract_game_scores(match)
@@ -535,6 +609,7 @@ def admin_login():
         password = request.form.get("password", "")
         if password == ADMIN_PASSWORD:
             session["admin_authenticated"] = True
+            session["admin_last_activity"] = datetime.now(timezone.utc).isoformat()
             flash("Logged in as admin.", "success")
             return redirect(next_url or url_for("admin_dashboard"))
         flash("Invalid password.", "error")
@@ -576,21 +651,67 @@ def admin_dashboard():
     )
 
 
-@app.route("/admin/generate_schedule")
+@app.route("/admin/generate_schedule", methods=["POST"])
 @admin_required
 def admin_generate_schedule():
     db = get_db()
+
+    # Check if any matches have been reported
+    reported_matches = db.execute(
+        "SELECT COUNT(*) as count FROM matches WHERE reported = 1 AND playoff = 0"
+    ).fetchone()
+
+    if reported_matches["count"] > 0:
+        flash(
+            f"⚠️ WARNING: Regenerating schedule will DELETE {reported_matches['count']} reported match(es) and reset to Week 1. All standings will be lost!",
+            "error",
+        )
+        # Require confirmation - add a hidden form field check
+        confirmation = request.form.get("confirm_regenerate")
+        if confirmation != "yes":
+            flash(
+                "Schedule regeneration cancelled. Add ?confirm=yes to the form to proceed.",
+                "info",
+            )
+            return redirect(url_for("admin_dashboard"))
+
     generate_weekly_schedule(db)
-    flash("Fresh 8-week schedule generated.", "success")
+    flash("Regular season schedule regenerated and reset to Week 1.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
-@app.route("/admin/force_playoffs")
+@app.route("/admin/force_playoffs", methods=["POST"])
 @admin_required
 def admin_force_playoffs():
     db = get_db()
+
+    # Check if there are enough players
+    player_count = db.execute("SELECT COUNT(*) as count FROM players").fetchone()[
+        "count"
+    ]
+    if player_count < 2:
+        flash("Need at least 2 players to generate playoff bracket.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    # Check if playoff bracket already exists with reported matches
+    existing_playoff_matches = db.execute(
+        "SELECT COUNT(*) as count FROM matches WHERE playoff = 1 AND reported = 1"
+    ).fetchone()
+
+    if existing_playoff_matches["count"] > 0:
+        flash(
+            f"⚠️ WARNING: Playoff bracket has {existing_playoff_matches['count']} reported match(es). Regenerating will DELETE all playoff results!",
+            "error",
+        )
+        confirmation = request.form.get("confirm_regenerate")
+        if confirmation != "yes":
+            flash(
+                "Playoff regeneration cancelled. Add confirmation to proceed.", "info"
+            )
+            return redirect(url_for("admin_dashboard"))
+
     create_playoff_bracket(db)
-    flash("Playoffs started.", "success")
+    flash("Playoff bracket generated from current standings.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -608,6 +729,33 @@ def admin_update_week():
     if new_week < 1 or new_week > MAX_WEEKS:
         flash(f"Week must be between 1 and {MAX_WEEKS}.", "error")
         return redirect(url_for("admin_dashboard"))
+
+    # Check if this will cause mass forfeits
+    if new_week > current_week:
+        # Count how many matches will be auto-forfeited
+        matches_to_forfeit = db.execute(
+            """
+            SELECT COUNT(*) as count FROM matches
+            WHERE playoff = 0
+              AND week IS NOT NULL
+              AND week >= ?
+              AND week < ?
+              AND player2_id IS NOT NULL
+              AND (reported = 0 OR reported IS NULL)
+            """,
+            (current_week, new_week),
+        ).fetchone()["count"]
+
+        if matches_to_forfeit > 0:
+            # Require confirmation for mass forfeits
+            confirmation = request.form.get("confirm_week_jump")
+            if confirmation != "yes":
+                flash(
+                    f"⚠️ WARNING: Advancing from Week {current_week} to Week {new_week} will AUTO-FORFEIT {matches_to_forfeit} unreported match(es). Use the confirmation checkbox to proceed.",
+                    "error",
+                )
+                return redirect(url_for("admin_dashboard"))
+
     forfeited = 0
     if new_week > current_week:
         cursor = db.execute(
@@ -645,13 +793,46 @@ def admin_update_week():
 @admin_required
 def admin_delete_player(player_id):
     db = get_db()
+
+    # Check if player has any reported matches
+    reported_matches = db.execute(
+        """
+        SELECT COUNT(*) as count FROM matches
+        WHERE (player1_id = ? OR player2_id = ?)
+        AND reported = 1
+        AND player2_id IS NOT NULL
+        """,
+        (player_id, player_id),
+    ).fetchone()
+
+    if reported_matches["count"] > 0:
+        flash(
+            "Cannot delete player with reported match history. This would corrupt rankings and standings.",
+            "error",
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    # Check if player is in playoff bracket
+    playoff_matches = db.execute(
+        "SELECT COUNT(*) as count FROM matches WHERE (player1_id = ? OR player2_id = ?) AND playoff = 1",
+        (player_id, player_id),
+    ).fetchone()
+
+    if playoff_matches["count"] > 0:
+        flash(
+            "Cannot delete player in playoff bracket. Reset the league or wait until next season.",
+            "error",
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    # Safe to delete - only unreported regular season matches
     db.execute(
         "DELETE FROM matches WHERE player1_id = ? OR player2_id = ?",
         (player_id, player_id),
     )
     db.execute("DELETE FROM players WHERE id = ?", (player_id,))
     db.commit()
-    flash("Player removed.", "success")
+    flash("Player removed. Note: Schedule may need regeneration.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -898,7 +1079,12 @@ def auto_resolve_byes(db):
     db.commit()
 
 
-def advance_playoff_winners(db):
+def advance_playoff_winners(db, _recursion_depth=0):
+    # Prevent infinite recursion
+    MAX_RECURSION_DEPTH = 10
+    if _recursion_depth >= MAX_RECURSION_DEPTH:
+        return
+
     round_numbers = list_round_numbers(db)
     created_next_round = False
     for round_number in round_numbers:
@@ -906,13 +1092,19 @@ def advance_playoff_winners(db):
         if not matches or not round_is_complete(matches):
             continue
         winners = collect_winners(matches)
+
+        # Check for problematic scenarios
+        if len(winners) == 0:
+            # All matches were double-forfeits or ties - admin needs to intervene
+            continue
+
         next_round = round_number + 1
         if len(winners) <= 1 or next_round_exists(db, next_round):
             continue
         create_next_round(db, winners, next_round)
         created_next_round = True
     if created_next_round:
-        advance_playoff_winners(db)
+        advance_playoff_winners(db, _recursion_depth + 1)
 
 
 def list_round_numbers(db):
@@ -983,6 +1175,8 @@ def determine_winner(match):
     if match["reported"] == 0:
         return None
     if get_value(match, "double_forfeit"):
+        # For double forfeits in playoffs, return None so no one advances
+        # Admin will need to manually fix or delete the match
         return None
     scores = extract_game_scores(match)
     if scores:
