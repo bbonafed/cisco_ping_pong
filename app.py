@@ -1,4 +1,5 @@
 import os
+import secrets
 import psycopg2
 import psycopg2.extras
 from collections import defaultdict
@@ -40,7 +41,16 @@ ADMIN_SESSION_TIMEOUT_MINUTES = (
 SETTINGS_CURRENT_WEEK = "current_week"
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("FLASK_SECRET_KEY environment variable must be set")
+
+# Security settings for production
+app.config["SESSION_COOKIE_SECURE"] = True  # Only send cookie over HTTPS
+app.config["SESSION_COOKIE_HTTPONLY"] = (
+    True  # Prevent JavaScript access to session cookie
+)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # CSRF protection
 
 
 class PostgreSQLWrapper:
@@ -671,7 +681,13 @@ def admin_login():
     next_url = request.args.get("next") or request.form.get("next")
     if request.method == "POST":
         password = request.form.get("password", "")
-        if password == ADMIN_PASSWORD:
+        # Use constant-time comparison to prevent timing attacks
+        # Ensure both are strings to avoid type issues
+        if (
+            password
+            and ADMIN_PASSWORD
+            and secrets.compare_digest(password, ADMIN_PASSWORD)
+        ):
             session["admin_authenticated"] = True
             session["admin_last_activity"] = datetime.now(timezone.utc).isoformat()
             flash("Logged in as admin.", "success")
