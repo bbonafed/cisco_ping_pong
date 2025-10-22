@@ -11,7 +11,9 @@ services:
         generateValue: true
       - key: ADMIN_PASSWORD
         sync: false
-    disk:
-      name: league-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
+
+databases:
+  - name: cisco-ping-pong-db
+    databaseName: cisco_ping_pong
+    user: ping_pong_user
+    plan: free  # Free PostgreSQL database - THIS persists data!

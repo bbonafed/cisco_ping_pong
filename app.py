@@ -1,5 +1,6 @@
 import os
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from collections import defaultdict
 from functools import wraps
 from datetime import datetime, timezone
@@ -17,15 +18,14 @@ from flask import (
     url_for,
 )
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# PostgreSQL connection string
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable must be set. Set it to your PostgreSQL connection string.")
 
-# Use persistent disk location on Render, local directory in development
-if os.path.exists("/opt/render/project/src/data"):
-    # Production: use persistent disk mount
-    DATABASE = "/opt/render/project/src/data/league.db"
-else:
-    # Development: use local directory
-    DATABASE = os.path.join(BASE_DIR, "league.db")
+# Fix Render's postgres:// to postgresql:// for psycopg2
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 if not ADMIN_PASSWORD:
@@ -41,13 +41,35 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
 
+class PostgreSQLWrapper:
+    """Wrapper to make PostgreSQL connection behave like SQLite for easier migration"""
+    def __init__(self, conn):
+        self.conn = conn
+        
+    def execute(self, query, params=None):
+        cursor = self.conn.cursor()
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        return cursor
+    
+    def commit(self):
+        self.conn.commit()
+    
+    def rollback(self):
+        self.conn.rollback()
+    
+    def close(self):
+        self.conn.close()
+
+
 def get_db():
     if "db" not in g:
         try:
-            g.db = sqlite3.connect(DATABASE)
-            g.db.row_factory = sqlite3.Row
-        except sqlite3.Error as e:
-            # Log the error and raise a more user-friendly exception
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            g.db = PostgreSQLWrapper(conn)
+        except psycopg2.Error as e:
             print(f"Database connection error: {e}")
             raise RuntimeError(
                 f"Unable to connect to database. Please contact admin. Error: {e}"
@@ -67,13 +89,12 @@ app.teardown_appcontext(close_db)
 def init_db():
     db = get_db()
 
-    # Enable foreign key constraints (SQLite has them disabled by default)
-    db.execute("PRAGMA foreign_keys = ON")
-
+    # PostgreSQL doesn't need foreign key pragma
+    
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS players (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             first_name TEXT NOT NULL,
             last_name TEXT NOT NULL,
             cec_id TEXT NOT NULL UNIQUE,
@@ -84,7 +105,7 @@ def init_db():
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS matches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             week INTEGER,
             player1_id INTEGER,
             player2_id INTEGER,
@@ -179,14 +200,14 @@ def ensure_match_columns(db):
 
 def ensure_default_settings(db):
     db.execute(
-        "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO settings (key, value) VALUES (%s, %s)",
         (SETTINGS_CURRENT_WEEK, "1"),
     )
 
 
 def get_current_week(db):
     row = db.execute(
-        "SELECT value FROM settings WHERE key = ?", (SETTINGS_CURRENT_WEEK,)
+        "SELECT value FROM settings WHERE key = %s", (SETTINGS_CURRENT_WEEK,)
     ).fetchone()
     if not row:
         return 1
@@ -198,7 +219,7 @@ def get_current_week(db):
 
 def set_current_week(db, week):
     db.execute(
-        "REPLACE INTO settings (key, value) VALUES (?, ?)",
+        "REPLACE INTO settings (key, value) VALUES (%s, %s)",
         (SETTINGS_CURRENT_WEEK, str(week)),
     )
 
@@ -436,14 +457,14 @@ def signup():
             return redirect(url_for("signup"))
 
         exists = db.execute(
-            "SELECT 1 FROM players WHERE UPPER(cec_id) = ?", (cec_id,)
+            "SELECT 1 FROM players WHERE UPPER(cec_id) = %s", (cec_id,)
         ).fetchone()
         if exists:
             flash("CEC ID already registered.", "error")
             return redirect(url_for("signup"))
 
         db.execute(
-            "INSERT INTO players (first_name, last_name, cec_id, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO players (first_name, last_name, cec_id, created_at) VALUES (%s, %s, %s, %s)",
             (first_name, last_name, cec_id, datetime.now(timezone.utc)),
         )
         db.commit()
@@ -475,7 +496,7 @@ def view_schedule(week):
         FROM matches m
         LEFT JOIN players p1 ON p1.id = m.player1_id
         LEFT JOIN players p2 ON p2.id = m.player2_id
-        WHERE m.playoff = 0 AND m.week = ?
+        WHERE m.playoff = 0 AND m.week = %s
         ORDER BY m.id ASC
         """,
         (week,),
@@ -499,7 +520,7 @@ def report_match(match_id):
         FROM matches m
         LEFT JOIN players p1 ON p1.id = m.player1_id
         LEFT JOIN players p2 ON p2.id = m.player2_id
-        WHERE m.id = ?
+        WHERE m.id = %s
         """,
         (match_id,),
     ).fetchone()
@@ -521,7 +542,7 @@ def report_match(match_id):
     if request.method == "POST":
         # Check for race condition - match might have been reported since page loaded
         current_match = db.execute(
-            "SELECT reported, double_forfeit FROM matches WHERE id = ?", (match_id,)
+            "SELECT reported, double_forfeit FROM matches WHERE id = %s", (match_id,)
         ).fetchone()
 
         if current_match["reported"] and not current_match["double_forfeit"]:
@@ -551,13 +572,13 @@ def report_match(match_id):
             cursor = db.execute(
                 """
                 UPDATE matches
-                SET score1 = ?, score2 = ?,
-                    game1_score1 = ?, game1_score2 = ?,
-                    game2_score1 = ?, game2_score2 = ?,
-                    game3_score1 = ?, game3_score2 = ?,
+                SET score1 = %s, score2 = %s,
+                    game1_score1 = %s, game1_score2 = %s,
+                    game2_score1 = %s, game2_score2 = %s,
+                    game3_score1 = %s, game3_score2 = %s,
                     double_forfeit = 0,
                     reported = 1
-                WHERE id = ? AND reported = 0
+                WHERE id = %s AND reported = 0
                 """,
                 (
                     totals[0],
@@ -704,7 +725,7 @@ def admin_generate_schedule():
         confirmation = request.form.get("confirm_regenerate")
         if confirmation != "yes":
             flash(
-                "Schedule regeneration cancelled. Add ?confirm=yes to the form to proceed.",
+                "Schedule regeneration cancelled. Add %sconfirm=yes to the form to proceed.",
                 "info",
             )
             return redirect(url_for("admin_dashboard"))
@@ -772,8 +793,8 @@ def admin_update_week():
             SELECT COUNT(*) as count FROM matches
             WHERE playoff = 0
               AND week IS NOT NULL
-              AND week >= ?
-              AND week < ?
+              AND week >= %s
+              AND week < %s
               AND player2_id IS NOT NULL
               AND (reported = 0 OR reported IS NULL)
             """,
@@ -807,8 +828,8 @@ def admin_update_week():
                 game3_score2 = NULL
             WHERE playoff = 0
               AND week IS NOT NULL
-              AND week >= ?
-              AND week < ?
+              AND week >= %s
+              AND week < %s
               AND player2_id IS NOT NULL
               AND (reported = 0 OR reported IS NULL)
             """,
@@ -832,7 +853,7 @@ def admin_delete_player(player_id):
     reported_matches = db.execute(
         """
         SELECT COUNT(*) as count FROM matches
-        WHERE (player1_id = ? OR player2_id = ?)
+        WHERE (player1_id = %s OR player2_id = %s)
         AND reported = 1
         AND player2_id IS NOT NULL
         """,
@@ -848,7 +869,7 @@ def admin_delete_player(player_id):
 
     # Check if player is in playoff bracket
     playoff_matches = db.execute(
-        "SELECT COUNT(*) as count FROM matches WHERE (player1_id = ? OR player2_id = ?) AND playoff = 1",
+        "SELECT COUNT(*) as count FROM matches WHERE (player1_id = %s OR player2_id = %s) AND playoff = 1",
         (player_id, player_id),
     ).fetchone()
 
@@ -861,10 +882,10 @@ def admin_delete_player(player_id):
 
     # Safe to delete - only unreported regular season matches
     db.execute(
-        "DELETE FROM matches WHERE player1_id = ? OR player2_id = ?",
+        "DELETE FROM matches WHERE player1_id = %s OR player2_id = %s",
         (player_id, player_id),
     )
-    db.execute("DELETE FROM players WHERE id = ?", (player_id,))
+    db.execute("DELETE FROM players WHERE id = %s", (player_id,))
     db.commit()
     flash("Player removed. Note: Schedule may need regeneration.", "success")
     return redirect(url_for("admin_dashboard"))
@@ -874,7 +895,7 @@ def admin_delete_player(player_id):
 @admin_required
 def admin_delete_match(match_id):
     db = get_db()
-    db.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+    db.execute("DELETE FROM matches WHERE id = %s", (match_id,))
     db.commit()
     flash("Match deleted.", "success")
     return redirect(url_for("admin_dashboard"))
@@ -993,7 +1014,7 @@ def generate_weekly_schedule(db):
             db.execute(
                 """
                 INSERT INTO matches (week, player1_id, player2_id, score1, score2, reported, playoff, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
                 """,
                 (week_index, p1, p2, score1, score2, reported_flag, now),
             )
@@ -1088,7 +1109,7 @@ def create_playoff_bracket(db):
         db.execute(
             """
             INSERT INTO matches (week, player1_id, player2_id, score1, score2, reported, playoff, playoff_round, created_at)
-            VALUES (NULL, ?, ?, ?, ?, ?, 1, 1, ?)
+            VALUES (NULL, %s, %s, %s, %s, %s, 1, 1, %s)
             """,
             (p1, p2, score1, score2, reported_flag, now),
         )
@@ -1107,7 +1128,7 @@ def auto_resolve_byes(db):
     ).fetchall()
     for match in byes:
         db.execute(
-            "UPDATE matches SET score1 = 0, score2 = 0 WHERE id = ?",
+            "UPDATE matches SET score1 = 0, score2 = 0 WHERE id = %s",
             (match["id"],),
         )
     db.commit()
@@ -1150,7 +1171,7 @@ def list_round_numbers(db):
 
 def get_round_matches(db, round_number):
     return db.execute(
-        "SELECT * FROM matches WHERE playoff = 1 AND playoff_round = ? ORDER BY id",
+        "SELECT * FROM matches WHERE playoff = 1 AND playoff_round = %s ORDER BY id",
         (round_number,),
     ).fetchall()
 
@@ -1176,7 +1197,7 @@ def collect_winners(matches):
 def next_round_exists(db, round_number):
     return (
         db.execute(
-            "SELECT 1 FROM matches WHERE playoff = 1 AND playoff_round = ?",
+            "SELECT 1 FROM matches WHERE playoff = 1 AND playoff_round = %s",
             (round_number,),
         ).fetchone()
         is not None
@@ -1195,7 +1216,7 @@ def create_next_round(db, winners, round_number):
         db.execute(
             """
             INSERT INTO matches (week, player1_id, player2_id, score1, score2, reported, playoff, playoff_round, created_at)
-            VALUES (NULL, ?, ?, ?, ?, ?, 1, ?, ?)
+            VALUES (NULL, %s, %s, %s, %s, %s, 1, %s, %s)
             """,
             (p1, p2, score1, score2, reported_flag, round_number, timestamp),
         )
@@ -1244,7 +1265,7 @@ def get_playoff_champion(db):
     if not winner_id:
         return None
     return db.execute(
-        "SELECT id, first_name, last_name FROM players WHERE id = ?",
+        "SELECT id, first_name, last_name FROM players WHERE id = %s",
         (winner_id,),
     ).fetchone()
 
