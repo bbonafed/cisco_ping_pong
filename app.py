@@ -143,7 +143,7 @@ def ensure_match_columns(db):
     existing = {
         row["name"] for row in db.execute("PRAGMA table_info(matches)").fetchall()
     }
-    
+
     # Define all columns that might be missing from older schemas
     definitions = {
         "game1_score1": "INTEGER",
@@ -157,7 +157,7 @@ def ensure_match_columns(db):
         "double_forfeit": "INTEGER DEFAULT 0",
         "playoff_round": "INTEGER",
     }
-    
+
     for column, ddl in definitions.items():
         if column not in existing:
             try:
@@ -165,7 +165,7 @@ def ensure_match_columns(db):
                 print(f"✅ Added column: {column}")
             except Exception as e:
                 print(f"⚠️ Could not add column {column}: {e}")
-    
+
     db.commit()
 
 
