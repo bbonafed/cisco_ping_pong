@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Cisco Ping Pong League{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="app-header">
+            <div class="app-header__inner">
+                <div class="brand">
+                    <span class="brand-mark">Cisco Ping Pong League</span>
+                    <span class="brand-subtitle">Friendly competition for the Cisco family</span>
+                </div>
+                <nav class="primary-nav">
+                    <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Home</a>
+                    <a class="nav-link {% if request.endpoint == 'signup' %}is-active{% endif %}" href="{{ url_for('signup') }}">Signup</a>
+                    <a class="nav-link {% if request.endpoint == 'playoffs' %}is-active{% endif %}" href="{{ url_for('playoffs') }}">Playoffs</a>
+                </nav>
+            </div>
+        </header>
+        <main class="app-main">
+            <div class="page-container">
+                {% with messages = get_flashed_messages(with_categories=True) %}
+                    {% if messages %}
+                        <div class="flash-stack">
+                            {% for category, message in messages %}
+                                <div class="flash flash-{{ category }}">{{ message }}</div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+        <footer class="app-footer">
+            <div class="footer-inner">
+                <span>&copy; Cisco Ping Pong League</span>
+                <span class="footer-tagline">Serve. Rally. Connect.</span>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>

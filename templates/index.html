@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}League Overview{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">League Standings</h2>
+            <p class="card-subtitle">Week {{ current_week }} in progress</p>
+        </div>
+    </div>
+    {% if rankings %}
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Player</th>
+                        <th>Wins</th>
+                        <th>Losses</th>
+                        <th>Point Differential</th>
+                        <th>Total Points</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in rankings %}
+                    <tr>
+                        <td>{{ entry.rank }}</td>
+                        <td>{{ entry.first_name }} {{ entry.last_name }}</td>
+                        <td>{{ entry.wins }}</td>
+                        <td>{{ entry.losses }}</td>
+                        <td>{{ entry.point_diff }}</td>
+                        <td>{{ entry.points_scored }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            No reported matches yet. Standings will appear as soon as scores are submitted.
+        </div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Weekly Schedule</h2>
+            <p class="card-subtitle">Catch every matchup and report scores on time.</p>
+        </div>
+    </div>
+    <ul class="list-week">
+        {% for week in weeks %}
+        <li>
+            <span class="tagline-highlight">Week {{ week }}</span>
+            <div class="table-actions">
+                {% if week == current_week %}
+                    <span class="chip chip-warning">In Progress</span>
+                {% elif week > current_week %}
+                    <span class="chip chip-upcoming">Upcoming</span>
+                {% else %}
+                    <span class="chip chip-neutral">Complete</span>
+                {% endif %}
+                <a class="btn btn-ghost btn-small" href="{{ url_for('view_schedule', week=week) }}">Open</a>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endblock %}

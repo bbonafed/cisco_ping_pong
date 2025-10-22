@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Login{% endblock %}
+
+{% block content %}
+<section class="card card-compact">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Admin Login</h2>
+            <p class="card-subtitle">Enter the shared passphrase to unlock league controls.</p>
+        </div>
+    </div>
+    <form method="post" class="form-grid">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <div class="form-row">
+            <div>
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Login</button>
+    </form>
+</section>
+{% endblock %}

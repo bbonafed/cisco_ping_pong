@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Week {{ week }} Schedule{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Week {{ week }} Matchups</h2>
+            <p class="card-subtitle">Review opponents, track scores, and keep the league rolling.</p>
+        </div>
+        <span class="chip chip-neutral">Current Week: {{ current_week }}</span>
+    </div>
+    {% if week > current_week %}
+        <div class="empty-state">
+            Reporting for these matches opens once the league advances to Week {{ week }}.
+        </div>
+    {% endif %}
+
+    {% if matches %}
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Match</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for match in matches %}
+                    <tr>
+                        <td>{{ match.player1_name }} vs {{ match.is_bye and 'BYE' or match.player2_name }}</td>
+                        <td>
+                            {% if match.is_bye %}
+                                <span class="chip chip-neutral">BYE</span>
+                            {% elif match.double_forfeit %}
+                                <span class="chip chip-danger">Double Forfeit</span>
+                            {% elif match.reported %}
+                                <span class="chip chip-success">Reported</span>
+                                {% if match.score_summary %}
+                                    <div class="card-meta">{{ match.score_summary }}</div>
+                                {% endif %}
+                            {% else %}
+                                <span class="chip chip-warning">Pending</span>
+                            {% endif %}
+                        </td>
+                        <td class="table-actions">
+                            {% if match.can_report %}
+                                <a class="btn btn-secondary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'Edit Score' if match.reported else 'Report Score' }}</a>
+                            {% elif not match.is_bye %}
+                                <span class="chip chip-neutral">Locked</span>
+                            {% else %}
+                                &mdash;
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            No matches scheduled for this week yet.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

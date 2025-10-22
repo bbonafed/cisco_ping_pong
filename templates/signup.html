@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Signup{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Player Signup</h2>
+            <p class="card-subtitle">Join the fun and we will add you to the next schedule.</p>
+        </div>
+    </div>
+    <form method="post" class="form-grid" autocomplete="off">
+        <div class="form-row inline">
+            <div>
+                <label for="first_name">First Name</label>
+                <input type="text" id="first_name" name="first_name" required>
+            </div>
+            <div>
+                <label for="last_name">Last Name</label>
+                <input type="text" id="last_name" name="last_name" required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div>
+                <label for="cec_id">CEC ID</label>
+                <input type="text" id="cec_id" name="cec_id" required>
+            </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Register</button>
+    </form>
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">Registered Players</h3>
+            <p class="card-subtitle">We are currently tracking {{ players|length }} competitors.</p>
+        </div>
+    </div>
+    {% if players %}
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>CEC ID</th>
+                        <th>Joined</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for player in players %}
+                    <tr>
+                        <td>{{ player.first_name }} {{ player.last_name }}</td>
+                        <td>{{ player.cec_id }}</td>
+                        <td>{{ player.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            No one has signed up yet. Be the first to register and challenge a co-worker!
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Admin Dashboard</h2>
+            <p class="card-subtitle">League controls, clean-up tools, and playoff management.</p>
+        </div>
+        <span class="chip chip-neutral">Week {{ current_week }} of {{ max_weeks }}</span>
+    </div>
+    <div class="card-grid two">
+        <a class="btn btn-secondary btn-block" href="{{ url_for('admin_generate_schedule') }}">Generate 8-Week Schedule</a>
+        <a class="btn btn-secondary btn-block" href="{{ url_for('admin_force_playoffs') }}">Start Playoffs Now</a>
+        <form method="post" action="{{ url_for('admin_reset_data') }}" onsubmit="return confirm('Reset all players, matches, and standings?');">
+            <button class="btn btn-danger btn-block" type="submit">Reset League Data</button>
+        </form>
+        <a class="btn btn-ghost btn-block" href="{{ url_for('admin_logout') }}">Logout</a>
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">League Week Control</h3>
+            <p class="card-subtitle">Advance weeks to unlock reporting or roll back for corrections.</p>
+        </div>
+    </div>
+    <form class="form-grid" method="post" action="{{ url_for('admin_update_week') }}">
+        <div class="form-row inline">
+            <div>
+                <label for="current_week">Current Week (1-{{ max_weeks }})</label>
+                <input type="number" id="current_week" name="current_week" min="1" max="{{ max_weeks }}" value="{{ current_week }}">
+            </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Update Week</button>
+    </form>
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">Registered Players</h3>
+            <p class="card-subtitle">Manage roster and remove inactive entries when needed.</p>
+        </div>
+        <span class="chip chip-neutral">{{ players|length }} Players</span>
+    </div>
+    {% if players %}
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>CEC ID</th>
+                        <th>Joined</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for player in players %}
+                    <tr>
+                        <td>{{ player.first_name }} {{ player.last_name }}</td>
+                        <td>{{ player.cec_id }}</td>
+                        <td>{{ player.created_at }}</td>
+                        <td class="table-actions">
+                            <form method="post" action="{{ url_for('admin_delete_player', player_id=player.id) }}">
+                                <button class="btn btn-danger btn-small" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">No players registered yet.</div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">Matches</h3>
+            <p class="card-subtitle">Monitor weekly games and clean up entries if mistakes slip through.</p>
+        </div>
+        <span class="chip chip-neutral">{{ matches|length }} Matches</span>
+    </div>
+    {% if matches %}
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Week/Round</th>
+                        <th>Match</th>
+                        <th>Score</th>
+                        <th>Reported</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for match in matches %}
+                    <tr>
+                        <td>{{ match.id }}</td>
+                        <td>{{ 'Playoff' if match.playoff else 'Regular' }}</td>
+                        <td>{{ match.week if match.week else match.playoff_round }}</td>
+                        <td>{{ match.player1_name }} vs {{ match.is_bye and 'BYE' or match.player2_name }}</td>
+                        <td>
+                            {% if match.is_bye %}
+                                <span class="chip chip-neutral">BYE</span>
+                            {% else %}
+                                {{ match.score_summary or '—' }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if match.reported %}
+                                <span class="chip chip-success">Yes</span>
+                            {% else %}
+                                <span class="chip chip-warning">No</span>
+                            {% endif %}
+                        </td>
+                        <td class="table-actions">
+                            <form method="post" action="{{ url_for('admin_delete_match', match_id=match.id) }}">
+                                <button class="btn btn-danger btn-small" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">No matches scheduled.</div>
+    {% endif %}
+</section>
+{% endblock %}
