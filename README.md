@@ -51,4 +51,4 @@ Configured for automatic deployment to Render.com via `render.yaml`.
 
 ## License
 
-MITT
+MIT
