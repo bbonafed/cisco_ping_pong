@@ -21,7 +21,9 @@ from flask import (
 # PostgreSQL connection string
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable must be set. Set it to your PostgreSQL connection string.")
+    raise RuntimeError(
+        "DATABASE_URL environment variable must be set. Set it to your PostgreSQL connection string."
+    )
 
 # Fix Render's postgres:// to postgresql:// for psycopg2
 if DATABASE_URL.startswith("postgres://"):
@@ -43,9 +45,10 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
 class PostgreSQLWrapper:
     """Wrapper to make PostgreSQL connection behave like SQLite for easier migration"""
+
     def __init__(self, conn):
         self.conn = conn
-        
+
     def execute(self, query, params=None):
         cursor = self.conn.cursor()
         if params:
@@ -53,13 +56,13 @@ class PostgreSQLWrapper:
         else:
             cursor.execute(query)
         return cursor
-    
+
     def commit(self):
         self.conn.commit()
-    
+
     def rollback(self):
         self.conn.rollback()
-    
+
     def close(self):
         self.conn.close()
 
@@ -67,7 +70,9 @@ class PostgreSQLWrapper:
 def get_db():
     if "db" not in g:
         try:
-            conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            conn = psycopg2.connect(
+                DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor
+            )
             g.db = PostgreSQLWrapper(conn)
         except psycopg2.Error as e:
             print(f"Database connection error: {e}")
@@ -90,7 +95,7 @@ def init_db():
     db = get_db()
 
     # PostgreSQL doesn't need foreign key pragma
-    
+
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS players (
@@ -169,9 +174,13 @@ def ensure_db_ready():
 
 def ensure_match_columns(db):
     """Migrate old database schemas to include all necessary columns."""
-    existing = {
-        row["name"] for row in db.execute("PRAGMA table_info(matches)").fetchall()
-    }
+    # PostgreSQL way to check existing columns
+    cursor = db.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'matches'
+    """)
+    existing = {row["column_name"] for row in cursor.fetchall()}
 
     # Define all columns that might be missing from older schemas
     definitions = {
