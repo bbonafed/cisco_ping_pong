@@ -758,11 +758,18 @@ textarea:focus {
     margin: 0 -1.5rem;
 }
 
+.bracket-wrapper {
+    position: relative;
+    display: inline-block;
+    padding: 0 1rem;
+}
+
 .bracket {
     display: flex;
     gap: 3rem;
     min-width: min-content;
-    padding: 0 1rem;
+    position: relative;
+    z-index: 1;
 }
 
 .bracket-round {
@@ -790,8 +797,14 @@ textarea:focus {
     border-radius: var(--radius-md);
     margin: 1rem 0;
     position: relative;
+    z-index: 1;
     overflow: visible;
     transition: all 0.2s ease;
+}
+
+.bracket-match[data-state="preview"],
+.bracket-match[data-state="future"] {
+    opacity: 0.85;
 }
 
 .bracket-match:hover {
@@ -867,16 +880,32 @@ textarea:focus {
     background: rgba(0, 0, 0, 0.2);
 }
 
-/* Connector lines for bracket - simple horizontal lines */
-.bracket-round:not(:last-child) .bracket-match::after {
-    content: '';
+.bracket-connector-layer {
     position: absolute;
-    right: -3rem;
-    top: 50%;
-    width: 3rem;
-    height: 2px;
-    background: #00bceb;
-    transform: translateY(-50%);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+    overflow: visible;
+}
+
+.bracket-connector-layer path {
+    stroke: rgba(0, 188, 235, 0.28);
+    stroke-width: 2;
+    fill: none;
+    transition: stroke 0.2s ease, stroke-width 0.2s ease;
+}
+
+.bracket-connector-layer path.is-complete {
+    stroke: var(--cisco-cyan);
+    stroke-width: 2.6;
+    filter: drop-shadow(0 0 6px rgba(0, 188, 235, 0.3));
+}
+
+.bracket-match[data-state="forfeit"] {
+    border-left: 3px solid var(--warning);
 }
 
 /* Championship styles */

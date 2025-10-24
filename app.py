@@ -38,6 +38,7 @@ ADMIN_SESSION_TIMEOUT_MINUTES = (
     30  # Admin session expires after 30 minutes of inactivity
 )
 SETTINGS_CURRENT_WEEK = "current_week"
+SETTINGS_CURRENT_PLAYOFF_ROUND = "current_playoff_round"
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -221,6 +222,10 @@ def ensure_default_settings(db):
         "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
         (SETTINGS_CURRENT_WEEK, "1"),
     )
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+        (SETTINGS_CURRENT_PLAYOFF_ROUND, "-1"),
+    )
 
 
 def get_current_week(db):
@@ -239,6 +244,26 @@ def set_current_week(db, week):
     db.execute(
         "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
         (SETTINGS_CURRENT_WEEK, str(week)),
+    )
+
+
+def get_current_playoff_round(db):
+    row = db.execute(
+        "SELECT value FROM settings WHERE key = %s",
+        (SETTINGS_CURRENT_PLAYOFF_ROUND,),
+    ).fetchone()
+    if not row:
+        return -1
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return -1
+
+
+def set_current_playoff_round(db, round_number):
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        (SETTINGS_CURRENT_PLAYOFF_ROUND, str(round_number)),
     )
 
 
@@ -299,7 +324,7 @@ def format_match_summary(match_row):
     return f"{wins1}-{wins2} ({details})"
 
 
-def build_match_view(match_row, current_week=None):
+def build_match_view(match_row, current_week=None, current_playoff_round=None):
     if isinstance(match_row, dict):
         data = dict(match_row)
     else:
@@ -310,12 +335,21 @@ def build_match_view(match_row, current_week=None):
     data["game_scores"] = extract_game_scores(match_row)
     totals = aggregate_match_points(match_row)
     data["total_score1"], data["total_score2"] = totals
-    if current_week is not None:
+    is_playoff_match = bool(data.get("playoff"))
+    if is_playoff_match:
+        if current_playoff_round is None:
+            current_playoff_round = -1
+        data["can_report"] = (
+            current_playoff_round >= 0
+            and data.get("playoff_round") == current_playoff_round
+            and not data["is_bye"]
+            and not data["double_forfeit"]
+            and data.get("player2_id") is not None
+        )
+    elif current_week is not None:
         week_value = data.get("week")
         if data["is_bye"] or data["double_forfeit"]:
             data["can_report"] = False
-        elif data.get("playoff"):
-            data["can_report"] = True
         elif week_value is None:
             data["can_report"] = False
         else:
@@ -464,6 +498,79 @@ def validate_best_of_three(scores):
     return wins1, wins2
 
 
+def _normalize_round_matches(round_info):
+    matches = round_info.get("matches", [])
+    round_number = round_info.get("round_number", 0)
+
+    if round_number == 0:
+        matches.sort(
+            key=lambda match: (
+                -(match.get("match_number") or 0),
+                match.get("id"),
+            )
+        )
+    else:
+        matches.sort(key=lambda match: (match.get("match_number") or match.get("id"),))
+
+    for idx, match in enumerate(matches, start=1):
+        match["display_index"] = idx
+        match.setdefault("match_number", idx)
+
+    round_info["match_count"] = len(matches)
+
+
+def _compute_next_display_index(round_info, next_round, match):
+    if not next_round:
+        return None
+
+    if round_info.get("round_number") == 0:
+        bracket_size = max(next_round.get("match_count", 0) * 2, 0)
+        target_seed = match.get("match_number") or match.get("display_index")
+        if not (bracket_size and target_seed):
+            return None
+        if target_seed <= bracket_size // 2:
+            target_index = target_seed
+        else:
+            target_index = bracket_size + 1 - target_seed
+        if target_index <= next_round.get("match_count", 0):
+            return target_index
+        return None
+
+    target_index = (match.get("display_index", 0) + 1) // 2
+    if target_index and target_index <= next_round.get("match_count", 0):
+        return target_index
+    return None
+
+
+def _link_rounds(rounds_sorted):
+    for idx, round_info in enumerate(rounds_sorted):
+        next_round = rounds_sorted[idx + 1] if idx + 1 < len(rounds_sorted) else None
+        for match in round_info.get("matches", []):
+            match["next_round_number"] = (
+                next_round.get("round_number") if next_round else None
+            )
+            match["next_display_index"] = _compute_next_display_index(
+                round_info, next_round, match
+            )
+
+
+def finalize_bracket_rounds(rounds):
+    """Normalize bracket rounds with consistent ordering and connector metadata."""
+    if not rounds:
+        return []
+
+    rounds_sorted = sorted(
+        rounds, key=lambda round_info: round_info.get("round_number", 0)
+    )
+
+    for round_info in rounds_sorted:
+        _normalize_round_matches(round_info)
+
+    _link_rounds(rounds_sorted)
+
+    return rounds_sorted
+
+
 def build_playoff_preview(db):
     """
     Build playoff preview showing ONLY the first round (play-ins + Round 1).
@@ -480,56 +587,25 @@ def build_playoff_preview(db):
     }
     seeds = [row["player_id"] for row in rankings]
     num_players = len(seeds)
+    round_entries = []
 
-    all_rounds = []
-
-    # Check if already a power of 2
     if num_players & (num_players - 1) == 0:
-        # Perfect power of 2 - no play-ins, just show first round
-        first_round_pairings = []
         pair_count = num_players // 2
+        matches = []
 
         for slot in range(pair_count):
             p1 = seeds[slot]
             p2 = seeds[-(slot + 1)]
-
             rank1 = player_ranks.get(p1, "?")
             rank2 = player_ranks.get(p2, "?")
 
-            match_view = {
-                "id": f"preview-r1-{slot}",
-                "player1_id": p1,
-                "player2_id": p2,
-                "player1_name": f"{rank1}. {names.get(p1, 'TBD')}",
-                "player2_name": f"{rank2}. {names.get(p2, 'TBD')}",
-                "is_bye": False,
-                "reported": False,
-                "score_summary": None,
-                "can_report": False,
-                "double_forfeit": False,
-                "total_score1": 0,
-                "total_score2": 0,
-                "playoff_round": 1,
-            }
-            first_round_pairings.append(match_view)
-
-        all_rounds.append((label_for_round(1, pair_count), first_round_pairings))
-
-        # Generate ALL remaining rounds for power-of-2 bracket
-        current_round_teams = pair_count
-        current_round_number = 2
-
-        while current_round_teams > 1:
-            next_round_matches = current_round_teams // 2
-            next_round_pairings = []
-
-            for i in range(next_round_matches):
-                match_view = {
-                    "id": f"preview-r{current_round_number}-{i}",
-                    "player1_id": None,
-                    "player2_id": None,
-                    "player1_name": "TBD",
-                    "player2_name": "TBD",
+            matches.append(
+                {
+                    "id": f"preview-r1-{slot}",
+                    "player1_id": p1,
+                    "player2_id": p2,
+                    "player1_name": f"{rank1}. {names.get(p1, 'TBD')}",
+                    "player2_name": f"{rank2}. {names.get(p2, 'TBD')}",
                     "is_bye": False,
                     "reported": False,
                     "score_summary": None,
@@ -537,24 +613,59 @@ def build_playoff_preview(db):
                     "double_forfeit": False,
                     "total_score1": 0,
                     "total_score2": 0,
-                    "playoff_round": current_round_number,
+                    "playoff_round": 1,
+                    "match_number": slot + 1,
                 }
-                next_round_pairings.append(match_view)
+            )
 
-            all_rounds.append(
-                (
-                    label_for_round(current_round_number, next_round_matches),
-                    next_round_pairings,
+        round_entries.append(
+            {
+                "round_number": 1,
+                "label": label_for_round(1, pair_count),
+                "matches": matches,
+            }
+        )
+
+        current_round_teams = pair_count
+        current_round_number = 2
+
+        while current_round_teams > 1:
+            next_round_matches = current_round_teams // 2
+            placeholders = []
+
+            for i in range(next_round_matches):
+                placeholders.append(
+                    {
+                        "id": f"preview-r{current_round_number}-{i}",
+                        "player1_id": None,
+                        "player2_id": None,
+                        "player1_name": "TBD",
+                        "player2_name": "TBD",
+                        "is_bye": False,
+                        "reported": False,
+                        "score_summary": None,
+                        "can_report": False,
+                        "double_forfeit": False,
+                        "total_score1": 0,
+                        "total_score2": 0,
+                        "playoff_round": current_round_number,
+                        "match_number": i + 1,
+                    }
                 )
+
+            round_entries.append(
+                {
+                    "round_number": current_round_number,
+                    "label": label_for_round(current_round_number, next_round_matches),
+                    "matches": placeholders,
+                }
             )
 
             current_round_teams = next_round_matches
             current_round_number += 1
 
     else:
-        # Need play-in games to reduce to lower power of 2
         target_bracket_size = 1 << (num_players.bit_length() - 1)
-
         num_play_in_games = num_players - target_bracket_size
         num_byes = target_bracket_size - num_play_in_games
 
@@ -565,38 +676,42 @@ def build_playoff_preview(db):
             match_info["target_seed"]: match_info for match_info in play_in_matches_meta
         }
 
-        # Show play-in games (Round 0)
-        play_in_pairings = []
+        play_in_matches = []
         for idx, match_meta in enumerate(play_in_matches_meta):
             p1 = match_meta["player1_id"]
             p2 = match_meta["player2_id"]
             rank1 = match_meta["player1_rank"]
             rank2 = match_meta["player2_rank"]
 
-            match_view = {
-                "id": f"preview-r0-{idx}",
-                "player1_id": p1,
-                "player2_id": p2,
-                "player1_name": f"{rank1}. {names.get(p1, 'TBD')}",
-                "player2_name": f"{rank2}. {names.get(p2, 'TBD')}",
-                "is_bye": False,
-                "reported": False,
-                "score_summary": None,
-                "can_report": False,
-                "double_forfeit": False,
-                "total_score1": 0,
-                "total_score2": 0,
-                "playoff_round": 0,
-            }
-            play_in_pairings.append(match_view)
-
-        if play_in_pairings:
-            all_rounds.append(
-                (label_for_round(0, len(play_in_pairings)), play_in_pairings)
+            play_in_matches.append(
+                {
+                    "id": f"preview-r0-{idx}",
+                    "player1_id": p1,
+                    "player2_id": p2,
+                    "player1_name": f"{rank1}. {names.get(p1, 'TBD')}",
+                    "player2_name": f"{rank2}. {names.get(p2, 'TBD')}",
+                    "is_bye": False,
+                    "reported": False,
+                    "score_summary": None,
+                    "can_report": False,
+                    "double_forfeit": False,
+                    "total_score1": 0,
+                    "total_score2": 0,
+                    "playoff_round": 0,
+                    "match_number": match_meta["target_seed"],
+                }
             )
 
-        # Show Round 1 (main bracket first round)
-        round_1_pairings = []
+        if play_in_matches:
+            round_entries.append(
+                {
+                    "round_number": 0,
+                    "label": label_for_round(0, len(play_in_matches)),
+                    "matches": play_in_matches,
+                }
+            )
+
+        round_one_matches = []
         main_bracket_first_round_matches = target_bracket_size // 2
 
         for match_index in range(1, main_bracket_first_round_matches + 1):
@@ -623,45 +738,13 @@ def build_playoff_preview(db):
             else:
                 player2_name = "TBD (Play-in Winner)"
 
-            match_view = {
-                "id": f"preview-r1-{match_index - 1}",
-                "player1_id": player1_id,
-                "player2_id": player2_id,
-                "player1_name": player1_name,
-                "player2_name": player2_name,
-                "is_bye": False,
-                "reported": False,
-                "score_summary": None,
-                "can_report": False,
-                "double_forfeit": False,
-                "total_score1": 0,
-                "total_score2": 0,
-                "playoff_round": 1,
-            }
-            round_1_pairings.append(match_view)
-
-        all_rounds.append(
-            (label_for_round(1, main_bracket_first_round_matches), round_1_pairings)
-        )
-
-        # Now generate ALL remaining rounds (even though they're empty/TBD)
-        # This shows the full bracket path
-        current_round_teams = (
-            main_bracket_first_round_matches  # Number of matches in current round
-        )
-        current_round_number = 2
-
-        while current_round_teams > 1:
-            next_round_matches = current_round_teams // 2
-            next_round_pairings = []
-
-            for i in range(next_round_matches):
-                match_view = {
-                    "id": f"preview-r{current_round_number}-{i}",
-                    "player1_id": None,
-                    "player2_id": None,
-                    "player1_name": "TBD",
-                    "player2_name": "TBD",
+            round_one_matches.append(
+                {
+                    "id": f"preview-r1-{match_index - 1}",
+                    "player1_id": player1_id,
+                    "player2_id": player2_id,
+                    "player1_name": player1_name,
+                    "player2_name": player2_name,
                     "is_bye": False,
                     "reported": False,
                     "score_summary": None,
@@ -669,21 +752,58 @@ def build_playoff_preview(db):
                     "double_forfeit": False,
                     "total_score1": 0,
                     "total_score2": 0,
-                    "playoff_round": current_round_number,
+                    "playoff_round": 1,
+                    "match_number": match_index,
                 }
-                next_round_pairings.append(match_view)
+            )
 
-            all_rounds.append(
-                (
-                    label_for_round(current_round_number, next_round_matches),
-                    next_round_pairings,
+        round_entries.append(
+            {
+                "round_number": 1,
+                "label": label_for_round(1, main_bracket_first_round_matches),
+                "matches": round_one_matches,
+            }
+        )
+
+        current_round_teams = main_bracket_first_round_matches
+        current_round_number = 2
+
+        while current_round_teams > 1:
+            next_round_matches = current_round_teams // 2
+            placeholders = []
+
+            for i in range(next_round_matches):
+                placeholders.append(
+                    {
+                        "id": f"preview-r{current_round_number}-{i}",
+                        "player1_id": None,
+                        "player2_id": None,
+                        "player1_name": "TBD",
+                        "player2_name": "TBD",
+                        "is_bye": False,
+                        "reported": False,
+                        "score_summary": None,
+                        "can_report": False,
+                        "double_forfeit": False,
+                        "total_score1": 0,
+                        "total_score2": 0,
+                        "playoff_round": current_round_number,
+                        "match_number": i + 1,
+                    }
                 )
+
+            round_entries.append(
+                {
+                    "round_number": current_round_number,
+                    "label": label_for_round(current_round_number, next_round_matches),
+                    "matches": placeholders,
+                }
             )
 
             current_round_teams = next_round_matches
             current_round_number += 1
 
-    return all_rounds
+    return finalize_bracket_rounds(round_entries)
 
 
 def admin_required(view):
@@ -827,6 +947,18 @@ def report_match(match_id):
         return redirect(url_for("index"))
 
     current_week = get_current_week(db)
+    if match["playoff"]:
+        current_playoff_round = get_current_playoff_round(db)
+        if current_playoff_round < 0:
+            flash("Playoff reporting is currently closed.", "error")
+            return redirect(url_for("playoffs"))
+        if match["playoff_round"] > current_playoff_round:
+            flash("This playoff round is not open for reporting yet.", "error")
+            return redirect(url_for("playoffs"))
+        if match["player2_id"] is None:
+            flash("This matchup is waiting for an opponent.", "error")
+            return redirect(url_for("playoffs"))
+
     if match["week"] and not match["playoff"]:
         if match["week"] > current_week:
             flash("This match is not yet open for reporting.", "error")
@@ -877,7 +1009,6 @@ def report_match(match_id):
 
             db.commit()
             flash("Match score saved successfully.", "success")
-            advance_playoff_winners(db)
         except Exception as e:
             db.rollback()
             flash(f"Error saving match: {str(e)}", "error")
@@ -900,6 +1031,7 @@ def report_match(match_id):
 @app.route("/playoffs")
 def playoffs():
     db = get_db()
+    current_playoff_round = get_current_playoff_round(db)
     rows = db.execute(
         """
         SELECT m.*, p1.first_name || ' ' || p1.last_name AS player1_name,
@@ -911,29 +1043,37 @@ def playoffs():
         ORDER BY m.playoff_round ASC, m.id ASC
         """
     ).fetchall()
-    grouped = []
+    rounds_payload = []
+    actual_rounds_map = {}
     if rows:
-        # Get rankings to add rank numbers to names
         rankings = calculate_rankings(db, include_playoffs=False)
         player_ranks = {row["player_id"]: row["rank"] for row in rankings}
 
-        # Group matches by round and calculate proper round names
-        by_round = defaultdict(list)
         matches_per_round = defaultdict(int)
 
-        # First pass: count matches per round
         for match in rows:
-            round_number = match["playoff_round"]
-            matches_per_round[round_number] += 1
+            matches_per_round[match["playoff_round"]] += 1
 
-        # Second pass: build match views with correct round names and ranks
+        rounds_map = {}
+
         for match in rows:
             round_number = match["playoff_round"]
             num_matches = matches_per_round[round_number]
-            label = label_for_round(round_number, num_matches)
-            match_view = build_match_view(match)
+            round_info = rounds_map.setdefault(
+                round_number,
+                {
+                    "round_number": round_number,
+                    "label": label_for_round(round_number, num_matches),
+                    "matches": [],
+                },
+            )
 
-            # Add rank numbers to player names
+            match_view = build_match_view(
+                match, current_playoff_round=current_playoff_round
+            )
+            match_view["match_number"] = match.get("match_number")
+            match_view["id"] = match["id"]
+
             if match["player1_id"]:
                 rank = player_ranks.get(match["player1_id"], "?")
                 match_view["player1_name"] = f"{rank}. {match['player1_name']}"
@@ -941,19 +1081,111 @@ def playoffs():
                 rank = player_ranks.get(match["player2_id"], "?")
                 match_view["player2_name"] = f"{rank}. {match['player2_name']}"
 
-            by_round[label].append(match_view)
+            round_info["matches"].append(match_view)
 
-        grouped = sorted(
-            by_round.items(),
-            key=lambda item: item[1][0]["playoff_round"] if item[1] else 0,
-        )
-    preview_rounds = [] if grouped else build_playoff_preview(db)
-    champion = get_playoff_champion(db)
+        rounds_payload = finalize_bracket_rounds(list(rounds_map.values()))
+
+        for round_info in rounds_payload:
+            round_number = round_info["round_number"]
+            for match_view in round_info["matches"]:
+                if match_view.get("double_forfeit"):
+                    match_view["state"] = "forfeit"
+                elif match_view.get("reported"):
+                    match_view["state"] = "complete"
+                else:
+                    if (
+                        current_playoff_round >= 0
+                        and round_number > current_playoff_round
+                    ):
+                        match_view["state"] = "future"
+                    else:
+                        match_view["state"] = "pending"
+
+                key = (
+                    round_number,
+                    match_view.get("match_number") or match_view.get("display_index"),
+                )
+                if key[1] is not None:
+                    actual_rounds_map[key] = match_view
+
+    base_rounds = build_playoff_preview(db)
+    has_playoffs = bool(rows)
+    default_state = "preview" if not has_playoffs else "future"
+
+    for round_info in base_rounds:
+        round_number = round_info["round_number"]
+        for match_view in round_info["matches"]:
+            match_view.setdefault("match_number", match_view.get("display_index"))
+            match_view["id"] = None
+            match_view["reported"] = False
+            match_view["double_forfeit"] = False
+            match_view["score_summary"] = None
+            match_view["game_scores"] = []
+            match_view["total_score1"] = match_view.get("total_score1", 0)
+            match_view["total_score2"] = match_view.get("total_score2", 0)
+            match_view["can_report"] = False
+            match_view["is_placeholder"] = True
+            match_view["state"] = default_state
+
+            key = (round_number, match_view.get("match_number"))
+            actual_match = actual_rounds_map.get(key)
+            if actual_match:
+                for field in [
+                    "id",
+                    "player1_id",
+                    "player2_id",
+                    "player1_name",
+                    "player2_name",
+                    "is_bye",
+                    "reported",
+                    "double_forfeit",
+                    "score_summary",
+                    "game_scores",
+                    "total_score1",
+                    "total_score2",
+                    "can_report",
+                ]:
+                    if field in actual_match:
+                        match_view[field] = actual_match.get(field)
+                match_view["state"] = actual_match.get("state", "pending")
+                match_view["is_placeholder"] = False
+
+            if not match_view.get("reported"):
+                if current_playoff_round < 0 and has_playoffs:
+                    match_view["state"] = "future"
+                elif (
+                    current_playoff_round >= 0 and round_number > current_playoff_round
+                ):
+                    match_view["state"] = "future"
+                    match_view["can_report"] = False
+                elif (
+                    current_playoff_round >= 0
+                    and round_number == current_playoff_round
+                    and match_view.get("player1_id")
+                    and match_view.get("player2_id")
+                    and not match_view.get("double_forfeit")
+                ):
+                    # Leave state as pending for active round matchups with opponents.
+                    match_view["state"] = match_view.get("state", "pending")
+                elif match_view.get("state") == "pending":
+                    match_view["state"] = "future"
+
+    rounds_payload = base_rounds
+    champion = get_playoff_champion(db) if has_playoffs else None
+    current_round_label = None
+    if has_playoffs and current_playoff_round >= 0 and rounds_payload:
+        for round_info in rounds_payload:
+            if round_info["round_number"] == current_playoff_round:
+                current_round_label = round_info["label"]
+                break
     return render_template(
         "playoffs.html",
-        rounds=grouped,
-        preview_rounds=preview_rounds,
+        rounds=rounds_payload,
+        preview_mode=not has_playoffs,
+        has_playoffs=has_playoffs,
         champion=champion,
+        current_playoff_round=current_playoff_round,
+        current_round_label=current_round_label,
     )
 
 
@@ -1128,6 +1360,7 @@ def admin_logout():
 def admin_dashboard():
     db = get_db()
     current_week = get_current_week(db)
+    current_playoff_round = get_current_playoff_round(db)
     players = db.execute(
         "SELECT id, first_name, last_name, cec_id FROM players ORDER BY created_at ASC"
     ).fetchall()
@@ -1141,7 +1374,14 @@ def admin_dashboard():
         ORDER BY m.playoff DESC, COALESCE(m.week, m.playoff_round), m.id
         """
     ).fetchall()
-    matches = [build_match_view(row, current_week=current_week) for row in rows]
+    matches = [
+        build_match_view(
+            row,
+            current_week=current_week,
+            current_playoff_round=current_playoff_round,
+        )
+        for row in rows
+    ]
 
     # Check if we can start playoffs
     can_start_playoffs = False
@@ -1167,22 +1407,16 @@ def admin_dashboard():
 
     # Check if we can advance playoff round
     can_advance_round = False
-    if playoffs_exist:
-        current_round_row = db.execute(
-            "SELECT MAX(playoff_round) as max_round FROM matches WHERE playoff = 1"
-        ).fetchone()
-
-        if current_round_row and current_round_row["max_round"]:
-            current_round = current_round_row["max_round"]
-            matches_in_round = get_round_matches(db, current_round)
-
-            if matches_in_round:
-                winners = collect_winners(matches_in_round)
-                can_advance_round = (
-                    round_is_complete(matches_in_round)
-                    and len(winners) > 1
-                    and not next_round_exists(db, current_round + 1)
-                )
+    active_playoff_label = None
+    if playoffs_exist and current_playoff_round >= 0:
+        matches_in_round = get_round_matches(db, current_playoff_round)
+        if matches_in_round:
+            active_playoff_label = label_for_round(
+                current_playoff_round, len(matches_in_round)
+            )
+            winners = collect_winners(matches_in_round)
+            if round_is_complete(matches_in_round) and winners:
+                can_advance_round = True
 
     return render_template(
         "admin.html",
@@ -1192,6 +1426,8 @@ def admin_dashboard():
         max_weeks=MAX_WEEKS,
         can_start_playoffs=can_start_playoffs,
         can_advance_round=can_advance_round,
+        current_playoff_round=current_playoff_round,
+        current_playoff_label=active_playoff_label,
     )
 
 
@@ -1306,22 +1542,14 @@ def admin_start_playoffs():
 def admin_advance_playoff_round():
     """Manually advance to the next playoff round."""
     db = get_db()
-
-    # Get the highest round number
-    current_round_row = db.execute(
-        "SELECT MAX(playoff_round) as max_round FROM matches WHERE playoff = 1"
-    ).fetchone()
-
-    if not current_round_row or current_round_row["max_round"] is None:
-        flash("No playoff rounds exist yet.", "error")
+    current_round = get_current_playoff_round(db)
+    if current_round < 0:
+        flash("Playoffs are not currently active.", "error")
         return redirect(url_for("admin_dashboard"))
 
-    current_round = current_round_row["max_round"]
-
-    # Check if current round is complete
     matches = get_round_matches(db, current_round)
     if not matches:
-        flash("No matches found for current round.", "error")
+        flash("No matches found for the active playoff round.", "error")
         return redirect(url_for("admin_dashboard"))
 
     if not round_is_complete(matches):
@@ -1329,27 +1557,44 @@ def admin_advance_playoff_round():
             1 for m in matches if not m["reported"] and m["player2_id"] is not None
         )
         flash(
-            f"Cannot advance: {unreported} match(es) in current round still unreported.",
+            f"Cannot advance: {unreported} match(es) in Round {current_round} are still unreported.",
             "error",
         )
         return redirect(url_for("admin_dashboard"))
 
-    # Collect winners
     winners = collect_winners(matches)
-
-    if len(winners) == 0:
-        flash(
-            "Cannot advance: No winners in current round (all forfeits/ties).", "error"
-        )
+    if not winners:
+        flash("Cannot advance: No winners recorded in the current round.", "error")
         return redirect(url_for("admin_dashboard"))
 
     if len(winners) == 1:
-        flash("Tournament complete! Champion has been crowned.", "success")
+        champion_id = winners[0]
+        champion = db.execute(
+            "SELECT first_name, last_name FROM players WHERE id = %s",
+            (champion_id,),
+        ).fetchone()
+        set_current_playoff_round(db, -1)
+        db.commit()
+        if champion:
+            flash(
+                f"Tournament complete! Champion: {champion['first_name']} {champion['last_name']}.",
+                "success",
+            )
+        else:
+            flash("Tournament complete! Champion has been crowned.", "success")
         return redirect(url_for("playoffs"))
 
-    # Special case: Play-in games (round 0) advance by filling Round 1 matches
     if current_round == 0:
-        # Get Round 1 matches in order
+        seed_to_winner = {}
+        for match in matches:
+            winner = determine_winner(match)
+            if not winner:
+                continue
+            target_seed = match.get("match_number")
+            if target_seed is None:
+                continue
+            seed_to_winner[target_seed] = winner
+
         round_1_matches = db.execute(
             """
             SELECT * FROM matches
@@ -1358,44 +1603,95 @@ def admin_advance_playoff_round():
             """
         ).fetchall()
 
-        # Fill in play-in winners
-        winner_index = 0
+        if not round_1_matches:
+            flash("Round 1 bracket is missing.", "error")
+            return redirect(url_for("admin_dashboard"))
+
+        pair_count = len(round_1_matches)
+        target_bracket_size = pair_count * 2 if pair_count else 0
+        updated = False
+
         for match in round_1_matches:
-            # Fill player1_id if NULL
-            if match["player1_id"] is None and winner_index < len(winners):
+            match_index = match.get("match_number")
+            if not match_index:
+                continue
+            seed1 = match_index
+            seed2 = (
+                target_bracket_size + 1 - match_index if target_bracket_size else None
+            )
+
+            if match["player1_id"] is None and seed1 in seed_to_winner:
                 db.execute(
                     "UPDATE matches SET player1_id = %s WHERE id = %s",
-                    (winners[winner_index], match["id"]),
+                    (seed_to_winner[seed1], match["id"]),
                 )
-                winner_index += 1
+                updated = True
 
-            # Fill player2_id if NULL
-            if match["player2_id"] is None and winner_index < len(winners):
+            if match["player2_id"] is None and seed2 in seed_to_winner:
                 db.execute(
                     "UPDATE matches SET player2_id = %s WHERE id = %s",
-                    (winners[winner_index], match["id"]),
+                    (seed_to_winner[seed2], match["id"]),
                 )
-                winner_index += 1
+                updated = True
 
+        if not updated:
+            flash(
+                "No available slots to fill with play-in winners. Verify bracket integrity.",
+                "error",
+            )
+            db.rollback()
+            return redirect(url_for("admin_dashboard"))
+
+        set_current_playoff_round(db, 1)
         db.commit()
         flash("Play-in winners advanced to Round 1!", "success")
         return redirect(url_for("playoffs"))
 
-    # Normal case: create next round
     next_round = current_round + 1
-    if next_round_exists(db, next_round):
-        flash("Next round already exists.", "error")
-        return redirect(url_for("admin_dashboard"))
+    if not next_round_exists(db, next_round):
+        create_next_round(db, winners, next_round)
+    else:
+        next_matches = get_round_matches(db, next_round)
+        if not next_matches:
+            flash("Next round bracket exists but contains no matches.", "error")
+            return redirect(url_for("admin_dashboard"))
 
-    create_next_round(db, winners, next_round)
+        winner_iter = iter(winners)
+        updated = False
+        for match in next_matches:
+            if match["player1_id"] is None:
+                try:
+                    player = next(winner_iter)
+                except StopIteration:
+                    break
+                db.execute(
+                    "UPDATE matches SET player1_id = %s WHERE id = %s",
+                    (player, match["id"]),
+                )
+                updated = True
+            if match["player2_id"] is None:
+                try:
+                    player = next(winner_iter)
+                except StopIteration:
+                    break
+                db.execute(
+                    "UPDATE matches SET player2_id = %s WHERE id = %s",
+                    (player, match["id"]),
+                )
+                updated = True
 
-    # Calculate number of matches in the new round for proper labeling
-    next_round_matches = db.execute(
+        if updated:
+            db.commit()
+
+    set_current_playoff_round(db, next_round)
+    db.commit()
+
+    next_round_count = db.execute(
         "SELECT COUNT(*) as count FROM matches WHERE playoff = 1 AND playoff_round = %s",
         (next_round,),
     ).fetchone()["count"]
 
-    round_label = label_for_round(next_round, next_round_matches)
+    round_label = label_for_round(next_round, next_round_count)
     flash(f"Advanced to {round_label}!", "success")
     return redirect(url_for("playoffs"))
 
@@ -1541,6 +1837,7 @@ def admin_reset_data():
     db.execute("ALTER SEQUENCE players_id_seq RESTART WITH 1")
     db.execute("ALTER SEQUENCE matches_id_seq RESTART WITH 1")
     set_current_week(db, 1)
+    set_current_playoff_round(db, -1)
     db.commit()
     flash("All league data cleared.", "success")
     return redirect(url_for("admin_dashboard"))
@@ -1734,6 +2031,8 @@ def create_playoff_bracket(db):
     db.commit()
     rankings = calculate_rankings(db, include_playoffs=False)
     if len(rankings) < 2:
+        set_current_playoff_round(db, -1)
+        db.commit()
         return
 
     player_ranks = {row["player_id"]: row["rank"] for row in rankings}
@@ -1745,6 +2044,7 @@ def create_playoff_bracket(db):
         # Perfect power of 2 - no play-ins needed
         now = datetime.now(timezone.utc)
         create_first_round_matches(db, seeds, playoff_round=1, created_at=now)
+        set_current_playoff_round(db, 1)
         db.commit()
         return
 
@@ -1816,6 +2116,7 @@ def create_playoff_bracket(db):
             (player1_id, player2_id, match_index, now),
         )
 
+    set_current_playoff_round(db, 0)
     db.commit()
 
 
@@ -2040,12 +2341,33 @@ def create_next_round(db, winners, round_number):
         score1 = 0 if is_bye else None
         score2 = 0 if is_bye else None
         reported_flag = 1 if is_bye else 0
+        match_number = (idx // 2) + 1
         db.execute(
             """
-            INSERT INTO matches (week, player1_id, player2_id, score1, score2, reported, playoff, playoff_round, created_at)
-            VALUES (NULL, %s, %s, %s, %s, %s, 1, %s, %s)
+            INSERT INTO matches (
+                week,
+                player1_id,
+                player2_id,
+                score1,
+                score2,
+                reported,
+                playoff,
+                playoff_round,
+                match_number,
+                created_at
+            )
+            VALUES (NULL, %s, %s, %s, %s, %s, 1, %s, %s, %s)
             """,
-            (p1, p2, score1, score2, reported_flag, round_number, timestamp),
+            (
+                p1,
+                p2,
+                score1,
+                score2,
+                reported_flag,
+                round_number,
+                match_number,
+                timestamp,
+            ),
         )
     db.commit()
     auto_resolve_byes(db)

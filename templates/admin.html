@@ -56,6 +56,11 @@
         <div>
             <h3 class="card-title">Playoff Control</h3>
             <p class="card-subtitle">Manually start playoffs and advance rounds when complete.</p>
+            {% if current_playoff_round is not none and current_playoff_round >= 0 %}
+            <p class="card-subtitle">Current playoff round: {{ current_playoff_label or ('Round ' ~ current_playoff_round) }}</p>
+            {% elif current_playoff_round is not none and current_playoff_round < 0 %}
+            <p class="card-subtitle">Playoffs currently locked. Start or advance when ready.</p>
+            {% endif %}
         </div>
     </div>
     <div class="card-grid two">
