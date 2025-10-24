@@ -54,6 +54,56 @@
 <section class="card">
     <div class="card-header">
         <div>
+            <h3 class="card-title">Playoff Control</h3>
+            <p class="card-subtitle">Manually start playoffs and advance rounds when complete.</p>
+        </div>
+    </div>
+    <div class="card-grid two">
+        {% if can_start_playoffs %}
+            <form method="post" action="{{ url_for('admin_start_playoffs') }}">
+                <button class="btn btn-success btn-block" type="submit">
+                    🏆 Start Playoffs
+                </button>
+                <p style="margin-top: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.7);">
+                    All regular season matches reported. Ready to create playoff bracket!
+                </p>
+            </form>
+        {% else %}
+            <div>
+                <button class="btn btn-secondary btn-block" disabled>
+                    🏆 Start Playoffs
+                </button>
+                <p style="margin-top: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.5);">
+                    Complete all Week {{ max_weeks }} matches to unlock playoffs.
+                </p>
+            </div>
+        {% endif %}
+
+        {% if can_advance_round %}
+            <form method="post" action="{{ url_for('admin_advance_playoff_round') }}">
+                <button class="btn btn-success btn-block" type="submit">
+                    ➡️ Advance to Next Round
+                </button>
+                <p style="margin-top: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.7);">
+                    Current playoff round complete. Ready to advance!
+                </p>
+            </form>
+        {% else %}
+            <div>
+                <button class="btn btn-secondary btn-block" disabled>
+                    ➡️ Advance to Next Round
+                </button>
+                <p style="margin-top: 8px; font-size: 0.85rem; color: rgba(255, 255, 255, 0.5);">
+                    Complete current playoff round to unlock next round.
+                </p>
+            </div>
+        {% endif %}
+    </div>
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
             <h3 class="card-title">Registered Players</h3>
             <p class="card-subtitle">Manage roster and remove inactive entries when needed.</p>
         </div>
@@ -135,8 +185,11 @@
                             {% endif %}
                         </td>
                         <td class="table-actions">
-                            <form method="post" action="{{ url_for('admin_delete_match', match_id=match.id) }}">
-                                <button class="btn btn-danger btn-small" type="submit">Delete</button>
+                            {% if not match.is_bye %}
+                                <a class="btn btn-secondary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">Edit Score</a>
+                            {% endif %}
+                            <form method="post" action="{{ url_for('admin_delete_match', match_id=match.id) }}" style="display: inline;">
+                                <button class="btn btn-danger btn-small" type="submit" data-confirm="Delete this match? This cannot be undone.">Delete</button>
                             </form>
                         </td>
                     </tr>

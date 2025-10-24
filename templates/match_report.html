@@ -40,11 +40,10 @@
                 </tbody>
             </table>
         </div>
-        <label class="checkbox-field">
-            <input type="checkbox" name="verified" value="true" {% if match.reported %}checked{% endif %}>
-            Result verified by both players
-        </label>
-        <button class="btn btn-primary" type="submit">Submit Result</button>
+        <div class="form-note" style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(0, 188, 235, 0.08); border-radius: var(--radius-sm); border-left: 3px solid var(--cisco-cyan);">
+            💡 <strong>Note:</strong> Scores can be edited during the current week if needed. Make sure both players agree on the final result.
+        </div>
+        <button class="btn btn-primary" type="submit">{{ 'Update Score' if match.reported else 'Submit Result' }}</button>
     </form>
 </section>
 {% endblock %}

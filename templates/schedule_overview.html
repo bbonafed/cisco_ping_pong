@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Schedule{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Weekly Schedule</h2>
+            <p class="card-subtitle">Current Week: {{ current_week }} of {{ weeks|length }} • View all matchups and report scores</p>
+        </div>
+    </div>
+    <ul class="list-week">
+        {% for week in weeks %}
+        <li>
+            <span class="tagline-highlight">Week {{ week }}</span>
+            <div class="table-actions">
+                {% if week == current_week %}
+                    <span class="chip chip-warning">⏳ In Progress</span>
+                {% elif week > current_week %}
+                    <span class="chip chip-upcoming">Upcoming</span>
+                {% else %}
+                    <span class="chip chip-success">✓ Complete</span>
+                {% endif %}
+                <a class="btn btn-primary btn-small" href="{{ url_for('view_schedule', week=week) }}">View Matches</a>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endblock %}

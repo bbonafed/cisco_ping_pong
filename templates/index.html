@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}League Overview{% endblock %}
+{% block title %}League Standings{% endblock %}
 
 {% block content %}
 <section class="card">
     <div class="card-header">
         <div>
             <h2 class="card-title">League Standings</h2>
-            <p class="card-subtitle">Week {{ current_week }} in progress</p>
+            <p class="card-subtitle">Week {{ current_week }} • Current season rankings</p>
         </div>
     </div>
     {% if rankings %}
@@ -58,26 +58,47 @@
 <section class="card">
     <div class="card-header">
         <div>
-            <h2 class="card-title">Weekly Schedule</h2>
-            <p class="card-subtitle">Catch every matchup and report scores on time.</p>
+            <h2 class="card-title">Tournament Rules</h2>
+            <p class="card-subtitle">How the Cisco Ping Pong League works</p>
         </div>
     </div>
-    <ul class="list-week">
-        {% for week in weeks %}
-        <li>
-            <span class="tagline-highlight">Week {{ week }}</span>
-            <div class="table-actions">
-                {% if week == current_week %}
-                    <span class="chip chip-warning">In Progress</span>
-                {% elif week > current_week %}
-                    <span class="chip chip-upcoming">Upcoming</span>
-                {% else %}
-                    <span class="chip chip-neutral">Complete</span>
-                {% endif %}
-                <a class="btn btn-ghost btn-small" href="{{ url_for('view_schedule', week=week) }}">Open</a>
-            </div>
-        </li>
-        {% endfor %}
-    </ul>
+    <div class="card-section">
+        <h3 class="tagline-highlight">Regular Season</h3>
+        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+            <li>8-week round-robin format where every player faces every other player</li>
+            <li>Matches are best-of-three games (first to 2 game wins)</li>
+            <li>Each game is played to 11 points (win by 2)</li>
+            <li>Players earn 1 win for winning the match (best-of-three)</li>
+            <li>Report your score each week before the next week begins</li>
+        </ul>
+    </div>
+    <div class="card-section">
+        <h3 class="tagline-highlight">Standings & Rankings</h3>
+        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+            <li>Players are ranked by: <strong>Wins</strong> → <strong>Point Differential</strong> → <strong>Total Points Scored</strong></li>
+            <li>Point differential = your total points minus opponent's total points across all matches</li>
+            <li>Check the standings page to track your rank throughout the season</li>
+        </ul>
+    </div>
+    <div class="card-section">
+        <h3 class="tagline-highlight">Playoffs</h3>
+        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+            <li>All players advance to a single-elimination playoff bracket</li>
+            <li>Seeding is based on final regular season standings (higher rank = better seed)</li>
+            <li>Playoffs use the same best-of-three format as the regular season</li>
+            <li>The bracket adjusts to the number of players (with byes for higher seeds if needed)</li>
+            <li>Win your way through the bracket to become the season champion 🏆</li>
+        </ul>
+    </div>
+    <div class="card-section">
+        <h3 class="tagline-highlight">How to Play</h3>
+        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+            <li><strong>Check your schedule:</strong> View the Schedule page to see your upcoming matches</li>
+            <li><strong>Play your matches:</strong> Find your opponent and play best-of-three to 11 points each game</li>
+            <li><strong>Report scores:</strong> Click "Report Score" on your match and enter all game scores</li>
+            <li><strong>Track progress:</strong> View your player profile for detailed stats and match history</li>
+            <li><strong>Compete for playoffs:</strong> Higher regular season rank = better playoff seed</li>
+        </ul>
+    </div>
 </section>
 {% endblock %}

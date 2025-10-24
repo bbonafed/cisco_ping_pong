@@ -27,7 +27,8 @@
                     <span class="brand-mark">Cisco Ping Pong League</span>
                 </div>
                 <nav class="primary-nav">
-                    <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Home</a>
+                    <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Standings</a>
+                    <a class="nav-link {% if request.endpoint in ['schedule_overview', 'view_schedule'] %}is-active{% endif %}" href="{{ url_for('schedule_overview') }}">Schedule</a>
                     <a class="nav-link {% if request.endpoint == 'signup' %}is-active{% endif %}" href="{{ url_for('signup') }}">Signup</a>
                     <a class="nav-link {% if request.endpoint == 'playoffs' %}is-active{% endif %}" href="{{ url_for('playoffs') }}">Playoffs</a>
                 </nav>

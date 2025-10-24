@@ -10,83 +10,103 @@
             <p class="card-subtitle">Top-ranked players advance to battle for the Cisco Cup.</p>
         </div>
         {% if champion %}
-            <span class="chip chip-success">Champion Crowned</span>
+            <span class="chip chip-success">✓ Champion Crowned</span>
         {% endif %}
     </div>
-    {% if champion %}
-        <div class="card-grid">
-            <div class="tagline-highlight">
-                <a href="{{ url_for('player_profile', player_id=champion.id) }}" class="player-link" style="color: var(--cisco-cyan); font-size: 1.3rem;">
-                    🏆 {{ champion.first_name }} {{ champion.last_name }}
-                </a>
-            </div>
-            <div class="card-meta">Congratulations to our season champion!</div>
-        </div>
-    {% endif %}
 </section>
 
 {% if rounds %}
-    {% for round_label, round_matches in rounds %}
-    <section class="card">
-        <div class="card-header">
-            <div>
-                <h3 class="card-title">{{ round_label }}</h3>
-                <p class="card-subtitle">Report results promptly to keep the bracket moving.</p>
-            </div>
-        </div>
-        <div class="table-wrapper">
-            <table class="table table-responsive">
-                <thead>
-                    <tr>
-                        <th>Match</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for match in round_matches %}
-                    <tr>
-                        <td data-label="Match">
-                            <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
-                                {{ match.player1_name }}
-                            </a>
-                            vs
-                            {% if match.is_bye %}
-                                <strong>BYE</strong>
+<section class="card">
+    <div class="bracket-container">
+        <div class="bracket">
+            {% for round_label, round_matches in rounds %}
+            <div class="bracket-round">
+                <div class="bracket-round-title">{{ round_label }}</div>
+                {% for match in round_matches %}
+                <div class="bracket-match {% if match.reported and not match.double_forfeit %}winner-decided{% endif %}">
+                    <!-- Player 1 -->
+                    <div class="bracket-player {% if match.reported and not match.is_bye and not match.double_forfeit %}{% if match.total_score1 > match.total_score2 %}winner{% else %}loser{% endif %}{% endif %}">
+                        <span class="bracket-player-name">
+                            {% if match.player1_id %}
+                                <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
+                                    {{ match.player1_name }}
+                                </a>
                             {% else %}
+                                <span style="color: rgba(255, 255, 255, 0.5); font-style: italic;">TBD (Play-in Winner)</span>
+                            {% endif %}
+                        </span>
+                        {% if match.reported and not match.is_bye %}
+                            <span class="bracket-score {% if match.total_score1 > match.total_score2 %}winner-score{% endif %}">
+                                {{ match.total_score1 }}
+                            </span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Player 2 -->
+                    <div class="bracket-player {% if match.is_bye %}{% elif match.reported and not match.double_forfeit %}{% if match.total_score2 > match.total_score1 %}winner{% else %}loser{% endif %}{% endif %}">
+                        <span class="bracket-player-name {% if match.is_bye and match.playoff_round > 0 %}bye{% endif %}">
+                            {% if match.is_bye and match.playoff_round == 0 %}
+                                {# This shouldn't happen - play-in games should have both players #}
+                                TBD
+                            {% elif match.is_bye and match.playoff_round > 0 %}
+                                {# Round 1+ with NULL player2 = waiting for play-in winner #}
+                                <span style="color: rgba(255, 255, 255, 0.5); font-style: italic;">TBD (Play-in Winner)</span>
+                            {% elif match.player2_id %}
                                 <a href="{{ url_for('player_profile', player_id=match.player2_id) }}" class="player-link">
                                     {{ match.player2_name }}
                                 </a>
-                            {% endif %}
-                        </td>
-                        <td data-label="Status">
-                            {% if match.is_bye %}
-                                <span class="match-status match-status-bye">Auto-Advance</span>
-                            {% elif match.double_forfeit %}
-                                <span class="match-status match-status-forfeit">Double Forfeit</span>
-                            {% elif match.reported %}
-                                <span class="match-status match-status-reported">✓ Reported</span>
-                                {% if match.score_summary %}
-                                    <div class="card-meta">{{ match.score_summary }}</div>
-                                {% endif %}
                             {% else %}
-                                <span class="match-status match-status-pending">⏳ Pending</span>
+                                <span style="color: rgba(255, 255, 255, 0.5); font-style: italic;">TBD</span>
                             {% endif %}
-                        </td>
-                        <td data-label="Actions" class="table-actions">
-                            {% if match.can_report %}
-                                <a class="btn btn-primary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'Edit Score' if match.reported else 'Report Score' }}</a>
-                            {% else %}
-                                &mdash;
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                        </span>
+                        {% if match.reported and not match.is_bye %}
+                            <span class="bracket-score {% if match.total_score2 > match.total_score1 %}winner-score{% endif %}">
+                                {{ match.total_score2 }}
+                            </span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Match Status/Actions -->
+                    {% if not match.is_bye %}
+                        {% if match.can_report %}
+                            <div class="bracket-match-actions">
+                                <a class="btn btn-primary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">
+                                    {{ 'Edit' if match.reported else 'Report' }}
+                                </a>
+                            </div>
+                        {% elif not match.reported %}
+                            <div class="bracket-match-status">
+                                <span class="match-status match-status-pending">⏳ Awaiting Results</span>
+                            </div>
+                        {% elif match.score_summary %}
+                            <div class="bracket-match-status">
+                                <span style="color: rgba(255, 255, 255, 0.7); font-size: 0.85rem;">{{ match.score_summary }}</span>
+                            </div>
+                        {% endif %}
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+
+            <!-- Champion Display -->
+            {% if champion %}
+            <div class="bracket-champion">
+                <div class="bracket-champion-card">
+                    <div class="bracket-champion-trophy">🏆</div>
+                    <div class="bracket-champion-name">
+                        <a href="{{ url_for('player_profile', player_id=champion.id) }}" class="player-link">
+                            {{ champion.first_name }} {{ champion.last_name }}
+                        </a>
+                    </div>
+                    <div class="bracket-champion-title">Season Champion</div>
+                </div>
+            </div>
+            {% endif %}
         </div>
-    </section>
-    {% endfor %}
+    </div>
+</section>
+
 {% elif preview_rounds %}
     <section class="card">
         <div class="card-header">
@@ -95,35 +115,53 @@
                 <p class="card-subtitle">Based on current regular-season rankings.</p>
             </div>
         </div>
-        {% for round_label, round_matches in preview_rounds %}
-            <div class="card-section">
-                <h4 class="tagline-highlight">{{ round_label }}</h4>
-                <div class="table-wrapper">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Matchup</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for match in round_matches %}
-                            <tr>
-                                <td>{{ match.player1_name }} vs {{ match.is_bye and 'BYE' or match.player2_name }}</td>
-                                <td>
-                                    {% if match.is_bye %}
-                                        <span class="chip chip-neutral">Auto-Advance</span>
-                                    {% else %}
-                                        <span class="chip chip-upcoming">Awaiting Playoffs</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+        <div class="bracket-container">
+            <div class="bracket">
+                {% for round_label, round_matches in preview_rounds %}
+                <div class="bracket-round">
+                    <div class="bracket-round-title">{{ round_label }}</div>
+                    {% for match in round_matches %}
+                    <div class="bracket-match">
+                        <!-- Player 1 -->
+                        <div class="bracket-player">
+                            <span class="bracket-player-name">
+                                {% if match.player1_id %}
+                                    <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
+                                        {{ match.player1_name }}
+                                    </a>
+                                {% else %}
+                                    {{ match.player1_name }}
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Player 2 -->
+                        <div class="bracket-player {% if match.is_bye %}{% endif %}">
+                            <span class="bracket-player-name {% if match.is_bye %}bye{% endif %}">
+                                {% if match.player2_id %}
+                                    <a href="{{ url_for('player_profile', player_id=match.player2_id) }}" class="player-link">
+                                        {{ match.player2_name }}
+                                    </a>
+                                {% else %}
+                                    <span style="color: rgba(255, 255, 255, 0.5); font-style: italic;">{{ match.player2_name }}</span>
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Match Status -->
+                        <div class="bracket-match-status">
+                            {% if match.is_bye %}
+                                <span class="chip chip-neutral" style="font-size: 0.75rem;">Auto-Advance</span>
+                            {% else %}
+                                <span class="chip chip-upcoming" style="font-size: 0.75rem;">Awaiting Playoffs</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
                 </div>
+                {% endfor %}
             </div>
-        {% endfor %}
+        </div>
     </section>
 {% else %}
     <section class="card">
