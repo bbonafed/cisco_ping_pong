@@ -43,7 +43,7 @@ WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 SLOT_MINUTES = 30
 SLOTS_PER_DAY = (24 * 60) // SLOT_MINUTES
 DAY_START_HOUR = 6
-DAY_END_HOUR = 22
+DAY_END_HOUR = 20
 VISIBLE_START_SLOT = (DAY_START_HOUR * 60) // SLOT_MINUTES
 VISIBLE_END_SLOT = (DAY_END_HOUR * 60) // SLOT_MINUTES
 
@@ -268,10 +268,13 @@ def slot_to_label(slot_index):
     if slot_index < 0 or slot_index > SLOTS_PER_DAY:
         raise ValueError(f"Slot index out of range: {slot_index}")
     if slot_index == SLOTS_PER_DAY:
-        return "24:00"
+        return "12:00 AM"
     hour, remainder = divmod(slot_index, 2)
     minutes = 30 if remainder else 0
-    return f"{hour:02d}:{minutes:02d}"
+    hour_mod = hour % 12
+    hour_display = 12 if hour_mod == 0 else hour_mod
+    suffix = "AM" if hour < 12 or hour == 24 else "PM"
+    return f"{hour_display}:{minutes:02d} {suffix}"
 
 
 def summarize_schedule_entry(entry):
@@ -356,6 +359,7 @@ def build_calendar_grid(
             {
                 "slot": slot_index,
                 "time_label": slot_to_label(slot_index),
+                "end_label": slot_to_label(min(slot_index + 1, SLOTS_PER_DAY)),
                 "cells": cells,
             }
         )
@@ -974,10 +978,59 @@ def admin_required(view):
 @app.route("/")
 def index():
     db = get_db()
+    current_week = get_current_week(db)
+
+    rows = db.execute(
+        """
+        SELECT m.id, m.player1_id, m.player2_id, m.score1, m.score2, m.reported,
+               m.game1_score1, m.game1_score2,
+               m.game2_score1, m.game2_score2,
+               m.game3_score1, m.game3_score2,
+               m.week,
+               m.double_forfeit,
+               p1.first_name || ' ' || p1.last_name AS player1_name,
+               p2.first_name || ' ' || p2.last_name AS player2_name
+        FROM matches m
+        LEFT JOIN players p1 ON p1.id = m.player1_id
+        LEFT JOIN players p2 ON p2.id = m.player2_id
+        WHERE m.playoff = 0 AND m.week = %s
+        ORDER BY m.id ASC
+        """,
+        (current_week,),
+    ).fetchall()
+
+    matches = [build_match_view(row, current_week=current_week) for row in rows]
+    schedule_entries = fetch_week_schedule(db, current_week)
+    schedule_by_match = {entry["match_id"]: entry for entry in schedule_entries}
+    for match in matches:
+        entry = schedule_by_match.get(match["id"])
+        if entry:
+            match["schedule_summary"] = entry["summary"]
+            match["schedule_weekday_label"] = entry["weekday_label"]
+            match["schedule_start_label"] = entry["start_label"]
+            match["schedule_end_label"] = entry["end_label"]
+
+    active_matches = [match for match in matches if not match["is_bye"]]
+    calendar_rows = build_calendar_grid(schedule_entries, target_match_id=None)
+
+    return render_template(
+        "index.html",
+        current_week=current_week,
+        matches=matches,
+        active_matches=active_matches,
+        schedule_entries=schedule_entries,
+        calendar_rows=calendar_rows,
+        weekday_labels=WEEKDAY_LABELS,
+    )
+
+
+@app.route("/standings")
+def standings():
+    db = get_db()
     rankings = calculate_rankings(db, include_playoffs=True)
     current_week = get_current_week(db)
     return render_template(
-        "index.html",
+        "standings.html",
         rankings=rankings,
         current_week=current_week,
     )
@@ -1123,7 +1176,7 @@ def match_calendar(week, match_id):
             return redirect(url_for("match_calendar", week=week, match_id=match_id))
 
         if start_slot < VISIBLE_START_SLOT or start_slot >= VISIBLE_END_SLOT:
-            flash("Select a time between 6:00 AM and 10:00 PM.", "error")
+            flash("Select a time between 6:00 AM and 8:00 PM.", "error")
             return redirect(url_for("match_calendar", week=week, match_id=match_id))
 
         end_slot = start_slot + 1
@@ -1190,18 +1243,12 @@ def match_calendar(week, match_id):
     )
     calendar_grid = build_calendar_grid(schedule_entries, match_id)
 
-    start_options = [
-        (slot, slot_to_label(slot))
-        for slot in range(VISIBLE_START_SLOT, VISIBLE_END_SLOT)
-    ]
-
     return render_template(
         "match_calendar.html",
         week=week,
         match=match_info,
         calendar_rows=calendar_grid,
         weekday_labels=WEEKDAY_LABELS,
-        start_options=start_options,
         current_entry=current_entry,
     )
 
@@ -1224,7 +1271,8 @@ def report_match(match_id):
         abort(404)
     if match["player2_id"] is None:
         flash("Byes do not require score reports.", "error")
-        return redirect(url_for("index"))
+        target_week = match.get("week") or get_current_week(db)
+        return redirect(url_for("view_schedule", week=target_week))
 
     current_week = get_current_week(db)
     if match["playoff"]:
@@ -1294,6 +1342,10 @@ def report_match(match_id):
             flash(f"Error saving match: {str(e)}", "error")
             return redirect(url_for("report_match", match_id=match_id))
 
+        if match["playoff"]:
+            return redirect(url_for("playoffs"))
+        if match.get("week") and not match["playoff"]:
+            return redirect(url_for("view_schedule", week=match["week"]))
         return redirect(url_for("index"))
 
     existing_scores = extract_game_scores(match)

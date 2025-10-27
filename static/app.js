@@ -100,6 +100,7 @@ function scheduleBracketDraw() {
 
 // Add loading spinner to forms on submit
 document.addEventListener('DOMContentLoaded', function() {
+    document.documentElement.classList.add('js-enabled');
     // Add loading to all forms except search forms
     const forms = document.querySelectorAll('form:not(.no-loading)');
     for (const form of forms) {
@@ -162,6 +163,156 @@ document.addEventListener('DOMContentLoaded', function() {
         for (const wrapper of wrapperNodes) {
             observer.observe(wrapper);
         }
+    }
+
+    const navToggle = document.getElementById('nav-toggle');
+    const navMenu = document.getElementById('nav-menu');
+    if (navToggle && navMenu) {
+        const closeMenu = () => {
+            navMenu.classList.remove('is-open');
+            navToggle.setAttribute('aria-expanded', 'false');
+        };
+
+        const openMenu = () => {
+            navMenu.classList.add('is-open');
+            navToggle.setAttribute('aria-expanded', 'true');
+        };
+
+        navToggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (navMenu.classList.contains('is-open')) {
+                closeMenu();
+            } else {
+                openMenu();
+            }
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!navMenu.contains(event.target) && event.target !== navToggle) {
+                closeMenu();
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeMenu();
+            }
+        });
+
+        const menuLinks = navMenu.querySelectorAll('a');
+        for (const link of menuLinks) {
+            link.addEventListener('click', () => closeMenu());
+        }
+    }
+
+    const bookingForm = document.getElementById('calendar-book-form');
+    if (bookingForm) {
+        const weekdayField = document.getElementById('booking-weekday');
+        const slotField = document.getElementById('booking-start');
+        const modal = document.getElementById('booking-modal');
+        const modalDetails = document.getElementById('booking-modal-details');
+        const confirmButton = document.getElementById('booking-confirm');
+        const cancelButton = document.getElementById('booking-cancel');
+        const calendarCells = document.querySelectorAll('.calendar-cell.is-available');
+
+        let pendingSelection = null;
+        let selectedCell = null;
+
+        const resetSelection = () => {
+            pendingSelection = null;
+            if (selectedCell) {
+                selectedCell.classList.remove('is-selected');
+                selectedCell = null;
+            }
+        };
+
+        const closeModal = () => {
+            if (modal) {
+                if (modal.open && typeof modal.close === 'function') {
+                    modal.close();
+                } else {
+                    modal.removeAttribute('open');
+                }
+            }
+            resetSelection();
+        };
+
+        const openModal = (message) => {
+            if (!modal) {
+                return;
+            }
+            if (modalDetails && message) {
+                modalDetails.textContent = message;
+            }
+            if (!modal.open) {
+                if (typeof modal.showModal === 'function') {
+                    modal.showModal();
+                } else {
+                    modal.setAttribute('open', 'true');
+                }
+            }
+        };
+
+        const buildMessage = (dayLabel, timeLabel, endLabel) => {
+            if (dayLabel && timeLabel && endLabel) {
+                return `Reserve ${dayLabel}, ${timeLabel} – ${endLabel}?`;
+            }
+            if (dayLabel && timeLabel) {
+                return `Reserve ${dayLabel} at ${timeLabel}?`;
+            }
+            return 'Reserve this slot?';
+        };
+
+        for (const cell of calendarCells) {
+            cell.addEventListener('click', () => {
+                const weekday = cell.dataset.weekday;
+                const slot = cell.dataset.slot;
+
+                if (weekday === undefined || slot === undefined) {
+                    return;
+                }
+
+                const dayLabel = cell.dataset.dayLabel || '';
+                const timeLabel = cell.dataset.timeLabel || '';
+                const endLabel = cell.dataset.endLabel || '';
+
+                pendingSelection = { weekday, slot };
+
+                if (selectedCell && selectedCell !== cell) {
+                    selectedCell.classList.remove('is-selected');
+                }
+                selectedCell = cell;
+                selectedCell.classList.add('is-selected');
+
+                openModal(buildMessage(dayLabel, timeLabel, endLabel));
+            });
+        }
+
+        if (confirmButton) {
+            confirmButton.addEventListener('click', () => {
+                if (!pendingSelection) {
+                    closeModal();
+                    return;
+                }
+
+                const { weekday, slot } = pendingSelection;
+                weekdayField.value = weekday;
+                slotField.value = slot;
+                if (typeof showLoading === 'function') {
+                    showLoading('Saving slot...');
+                }
+                closeModal();
+                bookingForm.submit();
+            });
+        }
+
+        const cancelHandler = () => closeModal();
+        cancelButton?.addEventListener('click', cancelHandler);
+        modal?.addEventListener('cancel', (event) => {
+            event.preventDefault();
+            closeModal();
+        });
+        modal?.addEventListener('close', resetSelection);
     }
 });
 

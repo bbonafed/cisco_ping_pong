@@ -27,12 +27,31 @@
                     <img src="{{ url_for('static', filename='cisco-tournament-logo.png') }}" alt="Cisco Ping Pong Tournament 2025" class="brand-logo">
                     <span class="brand-mark">Cisco Ping Pong League</span>
                 </div>
-                <nav class="primary-nav">
-                    <a class="nav-link {% if request.endpoint == 'index' %}is-active{% endif %}" href="{{ url_for('index') }}">Standings</a>
-                    <a class="nav-link {% if request.endpoint in ['schedule_overview', 'view_schedule', 'match_calendar'] %}is-active{% endif %}" href="{{ url_for('schedule_overview') }}">Schedule</a>
-                    <a class="nav-link {% if request.endpoint == 'signup' %}is-active{% endif %}" href="{{ url_for('signup') }}">Signup</a>
-                    <a class="nav-link {% if request.endpoint == 'playoffs' %}is-active{% endif %}" href="{{ url_for('playoffs') }}">Playoffs</a>
-                </nav>
+                    <nav class="primary-nav">
+                        <div class="nav-dropdown">
+                            <button class="nav-toggle" id="nav-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="nav-menu">
+                                Menu
+                                <span class="nav-caret" aria-hidden="true" style="font-size: 1.5em; position: relative; top: -0.1em;">▾</span>
+                            </button>
+                            <ul class="nav-menu" id="nav-menu">
+                                <li class="nav-menu__item {% if request.endpoint == 'index' %}is-active{% endif %}">
+                                    <a href="{{ url_for('index') }}">Home</a>
+                                </li>
+                                <li class="nav-menu__item {% if request.endpoint == 'standings' %}is-active{% endif %}">
+                                    <a href="{{ url_for('standings') }}">Standings</a>
+                                </li>
+                                <li class="nav-menu__item {% if request.endpoint in ['schedule_overview', 'view_schedule', 'match_calendar'] %}is-active{% endif %}">
+                                    <a href="{{ url_for('schedule_overview') }}">Schedule</a>
+                                </li>
+                                <li class="nav-menu__item {% if request.endpoint == 'signup' %}is-active{% endif %}">
+                                    <a href="{{ url_for('signup') }}">Signup</a>
+                                </li>
+                                <li class="nav-menu__item {% if request.endpoint == 'playoffs' %}is-active{% endif %}">
+                                    <a href="{{ url_for('playoffs') }}">Playoffs</a>
+                                </li>
+                            </ul>
+                        </div>
+                    </nav>
             </div>
         </header>
         <main class="app-main">

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}League Standings{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">League Standings</h2>
+            <p class="card-subtitle">Week {{ current_week }} • Current season rankings</p>
+        </div>
+    </div>
+    {% if rankings %}
+        <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="player-search" class="no-loading" placeholder="Search players..." autocomplete="off">
+        </div>
+        <div class="table-wrapper">
+            <table class="table standings-table table-responsive">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Player</th>
+                        <th>Wins</th>
+                        <th>Losses</th>
+                        <th>Point Diff</th>
+                        <th>Total Points</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in rankings %}
+                    <tr class="searchable-row">
+                        <td class="rank-cell" data-label="Rank">{{ entry.rank }}</td>
+                        <td class="player-name" data-label="Player">
+                            <a href="{{ url_for('player_profile', player_id=entry.player_id) }}" class="player-link">
+                                {{ entry.first_name }} {{ entry.last_name }}
+                            </a>
+                        </td>
+                        <td data-label="Wins">{{ entry.wins }}</td>
+                        <td data-label="Losses">{{ entry.losses }}</td>
+                        <td data-label="Point Diff" class="{% if entry.point_diff > 0 %}positive{% elif entry.point_diff < 0 %}negative{% endif %}">
+                            {% if entry.point_diff > 0 %}+{% endif %}{{ entry.point_diff }}
+                        </td>
+                        <td data-label="Total Points">{{ entry.points_scored }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            No reported matches yet. Standings will appear as soon as scores are submitted.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

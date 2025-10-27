@@ -1,58 +1,60 @@
 {% extends "base.html" %}
 
-{% block title %}League Standings{% endblock %}
+{% block title %}League Hub{% endblock %}
 
 {% block content %}
 <section class="card">
     <div class="card-header">
         <div>
-            <h2 class="card-title">League Standings</h2>
-            <p class="card-subtitle">Week {{ current_week }} • Current season rankings</p>
+            <h2 class="card-title">Week {{ current_week }} at a Glance</h2>
+            <p class="card-subtitle">Room bookings across the work week, straight from the calendar.</p>
         </div>
+        <a class="btn btn-secondary" href="{{ url_for('view_schedule', week=current_week) }}">View Full Schedule</a>
     </div>
-    {% if rankings %}
-        <!-- Search Box -->
-        <div class="search-box">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="player-search" class="no-loading" placeholder="Search players..." autocomplete="off">
+    <div class="card-section">
+        {% if schedule_entries %}
+            <div class="card-meta">{{ schedule_entries|length }} {{ 'booking' if schedule_entries|length == 1 else 'bookings' }} reserved so far this week.</div>
+        {% else %}
+            <div class="card-meta">No reservations yet — head to the full calendar to claim a slot.</div>
+        {% endif %}
+    </div>
+    <div class="card-section">
+        <div class="calendar-legend">
+            <span class="legend-item legend-item-open"><span class="legend-swatch"></span>Open slot</span>
+            <span class="legend-item legend-item-booked"><span class="legend-swatch"></span>Reserved match</span>
         </div>
-        <div class="table-wrapper">
-            <table class="table standings-table table-responsive">
+        <div class="calendar-wrapper">
+            <table class="calendar-table calendar-table--preview" aria-label="Week {{ current_week }} room reservations">
                 <thead>
                     <tr>
-                        <th>Rank</th>
-                        <th>Player</th>
-                        <th>Wins</th>
-                        <th>Losses</th>
-                        <th>Point Diff</th>
-                        <th>Total Points</th>
+                        <th>Time</th>
+                        {% for label in weekday_labels %}
+                            <th>{{ label }}</th>
+                        {% endfor %}
                     </tr>
                 </thead>
                 <tbody>
-                    {% for entry in rankings %}
-                    <tr class="searchable-row">
-                        <td class="rank-cell" data-label="Rank">{{ entry.rank }}</td>
-                        <td class="player-name" data-label="Player">
-                            <a href="{{ url_for('player_profile', player_id=entry.player_id) }}" class="player-link">
-                                {{ entry.first_name }} {{ entry.last_name }}
-                            </a>
-                        </td>
-                        <td data-label="Wins">{{ entry.wins }}</td>
-                        <td data-label="Losses">{{ entry.losses }}</td>
-                        <td data-label="Point Diff" class="{% if entry.point_diff > 0 %}positive{% elif entry.point_diff < 0 %}negative{% endif %}">
-                            {% if entry.point_diff > 0 %}+{% endif %}{{ entry.point_diff }}
-                        </td>
-                        <td data-label="Total Points">{{ entry.points_scored }}</td>
-                    </tr>
+                    {% for row in calendar_rows %}
+                        <tr>
+                            <td class="calendar-time">{{ row.time_label }}</td>
+                            {% for cell in row.cells %}
+                                <td class="calendar-cell{% if cell.occupied %} is-booked{% else %} is-open{% endif %}">
+                                    {% if cell.occupied and cell.starts %}
+                                        <div class="calendar-event">
+                                            <strong>{{ cell.entry.player1_name or 'TBD' }}</strong>
+                                            <span class="vs-label">vs</span>
+                                            <strong>{{ cell.entry.player2_name or 'BYE' }}</strong>
+                                            <div class="calendar-event-time">{{ cell.entry.start_label }} - {{ cell.entry.end_label }}</div>
+                                        </div>
+                                    {% endif %}
+                                </td>
+                            {% endfor %}
+                        </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-    {% else %}
-        <div class="empty-state">
-            No reported matches yet. Standings will appear as soon as scores are submitted.
-        </div>
-    {% endif %}
+    </div>
 </section>
 
 <section class="card">
@@ -64,7 +66,7 @@
     </div>
     <div class="card-section">
         <h3 class="tagline-highlight">Regular Season</h3>
-        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+        <ul class="rule-list">
             <li>8-week round-robin format where every player faces every other player</li>
             <li>Matches are best-of-three games (first to 2 game wins)</li>
             <li>Each game is played to 11 points (win by 2)</li>
@@ -74,7 +76,7 @@
     </div>
     <div class="card-section">
         <h3 class="tagline-highlight">Standings & Rankings</h3>
-        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+        <ul class="rule-list">
             <li>Players are ranked by: <strong>Wins</strong> → <strong>Point Differential</strong> → <strong>Total Points Scored</strong></li>
             <li>Point differential = your total points minus opponent's total points across all matches</li>
             <li>Check the standings page to track your rank throughout the season</li>
@@ -82,7 +84,7 @@
     </div>
     <div class="card-section">
         <h3 class="tagline-highlight">Playoffs</h3>
-        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+        <ul class="rule-list">
             <li>All players advance to a single-elimination playoff bracket</li>
             <li>Seeding is based on final regular season standings (higher rank = better seed)</li>
             <li>Playoffs use the same best-of-three format as the regular season but are to 21 points.</li>
@@ -92,7 +94,7 @@
     </div>
     <div class="card-section">
         <h3 class="tagline-highlight">How to Play</h3>
-        <ul style="line-height: 1.8; color: rgba(255, 255, 255, 0.9);">
+        <ul class="rule-list">
             <li><strong>Check your schedule:</strong> View the Schedule page to see your upcoming matches</li>
             <li><strong>Play your matches:</strong> Find your opponent and play best-of-three to 11 points each game</li>
             <li><strong>Report scores:</strong> Click "Report Score" on your match and enter all game scores</li>
