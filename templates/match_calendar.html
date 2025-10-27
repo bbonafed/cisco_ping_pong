@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Week {{ week }} Calendar{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Book Match Time</h2>
+            <p class="card-subtitle">Reserve a 30-minute slot between Monday and Friday to show when the room is in use.</p>
+        </div>
+        <a class="btn btn-secondary" href="{{ url_for('view_schedule', week=week) }}">Back to Week {{ week }}</a>
+    </div>
+
+    <div class="card-section match-calendar-summary">
+        <div class="matchup-heading">
+            <span class="player-name">{{ match.player1_name }}</span>
+            <span class="vs-label">vs</span>
+            <span class="player-name">{{ match.player2_name }}</span>
+        </div>
+        {% if current_entry %}
+            <div class="chip chip-success">Booked: {{ current_entry.summary }}</div>
+        {% else %}
+            <div class="card-meta">No slot reserved yet.</div>
+        {% endif %}
+    </div>
+
+    <div class="card-section">
+        <form method="post" class="form-grid match-calendar-form">
+            <input type="hidden" name="action" value="book">
+            <div>
+                <label for="weekday">Day</label>
+                <select name="weekday" id="weekday" required>
+                    {% for label in weekday_labels %}
+                        <option value="{{ loop.index0 }}" {% if current_entry and current_entry.weekday == loop.index0 %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="start_slot">Start Time</label>
+                <select name="start_slot" id="start_slot" required>
+                    {% for value, label in start_options %}
+                        <option value="{{ value }}" {% if current_entry and current_entry.slot_start == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+                <p class="form-help">Each booking blocks a single 30-minute slot. Available from 06:00 to 22:00.</p>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save Booking</button>
+            </div>
+        </form>
+        {% if current_entry %}
+            <form method="post" class="no-loading match-calendar-clear">
+                <input type="hidden" name="action" value="clear">
+                <button type="submit" class="btn btn-ghost">Clear Booking</button>
+            </form>
+        {% endif %}
+    </div>
+
+    <div class="card-section">
+        <div class="calendar-legend">
+            <span class="legend-item"><span class="legend-swatch"></span>Booked slot</span>
+            <span class="legend-item legend-item-current"><span class="legend-swatch"></span>This matchup</span>
+        </div>
+        <div class="calendar-wrapper">
+            <table class="calendar-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        {% for label in weekday_labels %}
+                            <th>{{ label }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in calendar_rows %}
+                        <tr>
+                            <td class="calendar-time">{{ row.time_label }}</td>
+                            {% for cell in row.cells %}
+                                <td class="calendar-cell{% if cell.occupied %} is-booked{% endif %}{% if cell.is_current %} is-current{% endif %}">
+                                    {% if cell.starts %}
+                                        <div class="calendar-event">
+                                            <strong>{{ cell.entry.player1_name or 'TBD' }}</strong>
+                                            <span class="vs-label">vs</span>
+                                            <strong>{{ cell.entry.player2_name or 'TBD' }}</strong>
+                                            <div class="calendar-event-time">{{ cell.entry.start_label }} - {{ cell.entry.end_label }}</div>
+                                        </div>
+                                    {% endif %}
+                                </td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+{% endblock %}

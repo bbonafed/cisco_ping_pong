@@ -60,8 +60,14 @@
                             {% else %}
                                 <span class="match-status match-status-upcoming">Upcoming</span>
                             {% endif %}
+                            {% if match.schedule_summary %}
+                                <div class="card-meta">Scheduled: {{ match.schedule_summary }}</div>
+                            {% endif %}
                         </td>
                         <td data-label="Actions" class="table-actions">
+                            {% if not match.is_bye %}
+                                <a class="btn btn-secondary btn-small" href="{{ url_for('match_calendar', week=week, match_id=match.id) }}">Calendar</a>
+                            {% endif %}
                             {% if match.can_report %}
                                 <a class="btn btn-primary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'Edit Score' if match.reported else 'Report Score' }}</a>
                             {% elif not match.is_bye %}

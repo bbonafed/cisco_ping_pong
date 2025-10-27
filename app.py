@@ -39,6 +39,13 @@ ADMIN_SESSION_TIMEOUT_MINUTES = (
 )
 SETTINGS_CURRENT_WEEK = "current_week"
 SETTINGS_CURRENT_PLAYOFF_ROUND = "current_playoff_round"
+WEEKDAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+SLOT_MINUTES = 30
+SLOTS_PER_DAY = (24 * 60) // SLOT_MINUTES
+DAY_START_HOUR = 6
+DAY_END_HOUR = 22
+VISIBLE_START_SLOT = (DAY_START_HOUR * 60) // SLOT_MINUTES
+VISIBLE_END_SLOT = (DAY_END_HOUR * 60) // SLOT_MINUTES
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -166,10 +173,28 @@ def init_db():
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_matches_players ON matches(player1_id, player2_id)"
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS match_schedules (
+            id SERIAL PRIMARY KEY,
+            match_id INTEGER UNIQUE,
+            week INTEGER NOT NULL,
+            weekday INTEGER NOT NULL,
+            slot_start INTEGER NOT NULL,
+            slot_end INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (match_id) REFERENCES matches (id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_match_schedules_week_day ON match_schedules(week, weekday, slot_start)"
+    )
 
     # Ensure all columns exist (for schema migrations)
     ensure_match_columns(db)
     ensure_default_settings(db)
+    prune_old_schedules(db)
 
     db.commit()
 
@@ -226,6 +251,115 @@ def ensure_default_settings(db):
         "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
         (SETTINGS_CURRENT_PLAYOFF_ROUND, "-1"),
     )
+
+
+def prune_old_schedules(db):
+    current_week = get_current_week(db)
+    try:
+        db.execute(
+            "DELETE FROM match_schedules WHERE week < %s",
+            (current_week,),
+        )
+    except Exception as exc:
+        print(f"⚠️ Could not prune old schedule entries: {exc}")
+
+
+def slot_to_label(slot_index):
+    if slot_index < 0 or slot_index > SLOTS_PER_DAY:
+        raise ValueError(f"Slot index out of range: {slot_index}")
+    if slot_index == SLOTS_PER_DAY:
+        return "24:00"
+    hour, remainder = divmod(slot_index, 2)
+    minutes = 30 if remainder else 0
+    return f"{hour:02d}:{minutes:02d}"
+
+
+def summarize_schedule_entry(entry):
+    day_label = WEEKDAY_LABELS[entry["weekday"]]
+    start_label = slot_to_label(entry["slot_start"])
+    end_label = slot_to_label(entry["slot_end"])
+    return f"{day_label} {start_label} - {end_label}"
+
+
+def fetch_week_schedule(db, week):
+    rows = db.execute(
+        """
+        SELECT ms.match_id,
+               ms.week,
+               ms.weekday,
+               ms.slot_start,
+               ms.slot_end,
+               ms.created_at,
+               p1.first_name || ' ' || p1.last_name AS player1_name,
+               p2.first_name || ' ' || p2.last_name AS player2_name
+        FROM match_schedules ms
+        JOIN matches m ON m.id = ms.match_id
+        LEFT JOIN players p1 ON p1.id = m.player1_id
+        LEFT JOIN players p2 ON p2.id = m.player2_id
+        WHERE ms.week = %s
+        ORDER BY ms.weekday ASC, ms.slot_start ASC
+        """,
+        (week,),
+    ).fetchall()
+
+    entries = []
+    for row in rows:
+        entry = dict(row)
+        entry["weekday_label"] = WEEKDAY_LABELS[entry["weekday"]]
+        entry["start_label"] = slot_to_label(entry["slot_start"])
+        entry["end_label"] = slot_to_label(entry["slot_end"])
+        entry["summary"] = summarize_schedule_entry(entry)
+        entry["duration_slots"] = entry["slot_end"] - entry["slot_start"]
+        entry["duration_minutes"] = entry["duration_slots"] * SLOT_MINUTES
+        entries.append(entry)
+    return entries
+
+
+def build_calendar_grid(
+    schedule_entries,
+    target_match_id,
+    start_slot=VISIBLE_START_SLOT,
+    end_slot=VISIBLE_END_SLOT,
+):
+    by_day = defaultdict(list)
+    for entry in schedule_entries:
+        by_day[entry["weekday"]].append(entry)
+    for entries in by_day.values():
+        entries.sort(key=lambda item: item["slot_start"])
+
+    grid_rows = []
+    for slot_index in range(start_slot, end_slot):
+        cells = []
+        for weekday in range(len(WEEKDAY_LABELS)):
+            occupant = next(
+                (
+                    entry
+                    for entry in by_day.get(weekday, [])
+                    if entry["slot_start"] <= slot_index < entry["slot_end"]
+                ),
+                None,
+            )
+            starts_here = bool(
+                occupant is not None and slot_index == occupant["slot_start"]
+            )
+            cells.append(
+                {
+                    "weekday": weekday,
+                    "occupied": occupant is not None,
+                    "starts": starts_here,
+                    "is_current": occupant is not None
+                    and occupant["match_id"] == target_match_id,
+                    "entry": occupant,
+                }
+            )
+        grid_rows.append(
+            {
+                "slot": slot_index,
+                "time_label": slot_to_label(slot_index),
+                "cells": cells,
+            }
+        )
+    return grid_rows
 
 
 def get_current_week(db):
@@ -918,11 +1052,157 @@ def view_schedule(week):
         (week,),
     ).fetchall()
     matches = [build_match_view(row, current_week=current_week) for row in rows]
+    schedule_entries = fetch_week_schedule(db, week)
+    schedule_by_match = {entry["match_id"]: entry for entry in schedule_entries}
+    for match in matches:
+        entry = schedule_by_match.get(match["id"])
+        if entry:
+            match["schedule_summary"] = entry["summary"]
+            match["schedule_weekday_label"] = entry["weekday_label"]
+            match["schedule_start_label"] = entry["start_label"]
+            match["schedule_end_label"] = entry["end_label"]
     return render_template(
         "schedule.html",
         week=week,
         matches=matches,
         current_week=current_week,
+    )
+
+
+@app.route(
+    "/schedule/<int:week>/match/<int:match_id>/calendar", methods=["GET", "POST"]
+)
+def match_calendar(week, match_id):
+    if week < 1 or week > MAX_WEEKS:
+        abort(404)
+
+    db = get_db()
+    match_row = db.execute(
+        """
+        SELECT m.id,
+               m.week,
+               m.player1_id,
+               m.player2_id,
+               p1.first_name || ' ' || p1.last_name AS player1_name,
+               p2.first_name || ' ' || p2.last_name AS player2_name
+        FROM matches m
+        LEFT JOIN players p1 ON p1.id = m.player1_id
+        LEFT JOIN players p2 ON p2.id = m.player2_id
+        WHERE m.id = %s AND m.week = %s AND m.playoff = 0
+        """,
+        (match_id, week),
+    ).fetchone()
+
+    if not match_row:
+        abort(404)
+
+    if match_row["player2_id"] is None:
+        flash("Cannot schedule a bye week matchup.", "error")
+        return redirect(url_for("view_schedule", week=week))
+
+    match_info = dict(match_row)
+
+    if request.method == "POST":
+        action = request.form.get("action", "book")
+
+        if action == "clear":
+            db.execute("DELETE FROM match_schedules WHERE match_id = %s", (match_id,))
+            db.commit()
+            flash("Match schedule cleared.", "success")
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        try:
+            weekday = int(request.form.get("weekday", ""))
+            start_slot = int(request.form.get("start_slot", ""))
+        except ValueError:
+            flash("Please choose a valid day and time window.", "error")
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        if weekday < 0 or weekday >= len(WEEKDAY_LABELS):
+            flash("Selected day is outside the Monday–Friday window.", "error")
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        if start_slot < VISIBLE_START_SLOT or start_slot >= VISIBLE_END_SLOT:
+            flash("Select a time between 6:00 AM and 10:00 PM.", "error")
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        end_slot = start_slot + 1
+
+        conflict = db.execute(
+            """
+            SELECT ms.match_id,
+             ms.weekday,
+             ms.slot_start,
+             ms.slot_end,
+                   p1.first_name || ' ' || p1.last_name AS player1_name,
+                   p2.first_name || ' ' || p2.last_name AS player2_name
+            FROM match_schedules ms
+            JOIN matches m ON m.id = ms.match_id
+            LEFT JOIN players p1 ON p1.id = m.player1_id
+            LEFT JOIN players p2 ON p2.id = m.player2_id
+            WHERE ms.week = %s
+              AND ms.weekday = %s
+              AND ms.match_id <> %s
+              AND NOT (ms.slot_end <= %s OR ms.slot_start >= %s)
+            LIMIT 1
+            """,
+            (week, weekday, match_id, start_slot, end_slot),
+        ).fetchone()
+
+        if conflict:
+            block_summary = summarize_schedule_entry(conflict)
+            occupant_name = f"{conflict['player1_name'] or 'TBD'} vs {conflict['player2_name'] or 'BYE'}"
+            flash(
+                f"Room already booked ({block_summary}) by {occupant_name}. Choose another slot.",
+                "error",
+            )
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        try:
+            db.execute(
+                """
+                INSERT INTO match_schedules (match_id, week, weekday, slot_start, slot_end, created_at)
+                VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (match_id) DO UPDATE SET
+                    week = EXCLUDED.week,
+                    weekday = EXCLUDED.weekday,
+                    slot_start = EXCLUDED.slot_start,
+                    slot_end = EXCLUDED.slot_end,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                (match_id, week, weekday, start_slot, end_slot),
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            flash(f"Could not save schedule: {exc}", "error")
+            return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+        summary = summarize_schedule_entry(
+            {"weekday": weekday, "slot_start": start_slot, "slot_end": end_slot}
+        )
+        flash(f"Match scheduled for {summary}.", "success")
+        return redirect(url_for("match_calendar", week=week, match_id=match_id))
+
+    schedule_entries = fetch_week_schedule(db, week)
+    current_entry = next(
+        (entry for entry in schedule_entries if entry["match_id"] == match_id), None
+    )
+    calendar_grid = build_calendar_grid(schedule_entries, match_id)
+
+    start_options = [
+        (slot, slot_to_label(slot))
+        for slot in range(VISIBLE_START_SLOT, VISIBLE_END_SLOT)
+    ]
+
+    return render_template(
+        "match_calendar.html",
+        week=week,
+        match=match_info,
+        calendar_rows=calendar_grid,
+        weekday_labels=WEEKDAY_LABELS,
+        start_options=start_options,
+        current_entry=current_entry,
     )
 
 
