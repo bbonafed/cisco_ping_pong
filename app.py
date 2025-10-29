@@ -1,4 +1,5 @@
 import os
+import random
 import secrets
 import psycopg2
 import psycopg2.extras
@@ -46,6 +47,12 @@ DAY_START_HOUR = 8
 DAY_END_HOUR = 18
 VISIBLE_START_SLOT = (DAY_START_HOUR * 60) // SLOT_MINUTES
 VISIBLE_END_SLOT = (DAY_END_HOUR * 60) // SLOT_MINUTES
+PLAYER_APPROVAL_QUERY = (
+    "SELECT id, first_name, last_name, approved FROM players WHERE id = %s"
+)
+PLAYER_APPROVAL_QUERY = (
+    "SELECT id, first_name, last_name, approved FROM players WHERE id = %s"
+)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -124,6 +131,7 @@ def init_db():
         )
     """
     )
+    ensure_player_columns(db)
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS matches (
@@ -205,6 +213,37 @@ def ensure_db_ready():
     # Manual playoff progression: admin will control when playoffs start and advance
     # auto_start_playoffs_if_ready(db)
     # advance_playoff_winners(db)
+
+
+def ensure_player_columns(db):
+    """Ensure player-related schema changes are applied."""
+    cursor = db.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'players'
+        """
+    )
+    existing = {row["column_name"] for row in cursor.fetchall()}
+
+    if "approved" not in existing:
+        try:
+            db.execute("ALTER TABLE players ADD COLUMN approved BOOLEAN")
+            db.execute("UPDATE players SET approved = TRUE")
+            db.execute("ALTER TABLE players ALTER COLUMN approved SET DEFAULT FALSE")
+            db.execute("ALTER TABLE players ALTER COLUMN approved SET NOT NULL")
+            print("✅ Added column: approved (default FALSE)")
+        except Exception as exc:
+            print(f"⚠️ Could not ensure players.approved column: {exc}")
+
+    if "approved_at" not in existing:
+        try:
+            db.execute("ALTER TABLE players ADD COLUMN approved_at TIMESTAMP")
+            print("✅ Added column: approved_at")
+        except Exception as exc:
+            print(f"⚠️ Could not add players.approved_at column: {exc}")
+
+    db.commit()
 
 
 def ensure_match_columns(db):
@@ -364,6 +403,139 @@ def build_calendar_grid(
             }
         )
     return grid_rows
+
+
+def player_has_week_match(db, player_id, week, exclude_match_id=None):
+    if player_id is None or week is None:
+        return False
+    params = [week, player_id, player_id]
+    query = (
+        "SELECT id FROM matches "
+        "WHERE playoff = 0 AND week = %s AND (player1_id = %s OR player2_id = %s)"
+    )
+    if exclude_match_id is not None:
+        query += " AND id <> %s"
+        params.append(exclude_match_id)
+    conflict = db.execute(query, tuple(params)).fetchone()
+    return conflict is not None
+
+
+def matchup_already_exists(db, player1_id, player2_id, exclude_match_id=None):
+    if not player1_id or not player2_id:
+        return False
+    params = [player1_id, player2_id, player2_id, player1_id]
+    query = (
+        "SELECT id FROM matches WHERE playoff = 0 "
+        "AND ((player1_id = %s AND player2_id = %s) OR (player1_id = %s AND player2_id = %s))"
+    )
+    if exclude_match_id is not None:
+        query += " AND id <> %s"
+        params.append(exclude_match_id)
+    conflict = db.execute(query, tuple(params)).fetchone()
+    return conflict is not None
+
+
+def format_player_name(player_row):
+    if not player_row:
+        return "Unknown Player"
+    return f"{player_row['first_name']} {player_row['last_name']}"
+
+
+def _valid_opponents_for(player, candidates, used_pairs):
+    options = []
+    for candidate in candidates:
+        if player is None and candidate is None:
+            continue
+        if player is None or candidate is None:
+            options.append(candidate)
+            continue
+        pair_key = frozenset({player, candidate})
+        if pair_key not in used_pairs:
+            options.append(candidate)
+    return options
+
+
+def _select_player_with_fewest_options(available, used_pairs):
+    best_player = None
+    best_options = None
+    for player in available:
+        remaining = [candidate for candidate in available if candidate is not player]
+        options = _valid_opponents_for(player, remaining, used_pairs)
+        if not options:
+            return player, []
+        if best_options is None or len(options) < len(best_options):
+            best_player = player
+            best_options = options
+            if len(best_options) == 1:
+                break
+    return best_player, list(best_options or [])
+
+
+def _build_week_matching(players, used_pairs, max_backtracks=500):
+    participants = list(players)
+    if len(participants) % 2 != 0:
+        participants.append(None)
+
+    attempts = 0
+    while attempts < max_backtracks:
+        attempts += 1
+        shuffled = participants[:]
+        random.shuffle(shuffled)
+        result = _match_week(tuple(shuffled), used_pairs, [])
+        if result is not None:
+            return result
+    return None
+
+
+def _match_week(available, used_pairs, matches):
+    if not available:
+        return matches
+
+    player, options = _select_player_with_fewest_options(list(available), used_pairs)
+    if not options:
+        return None
+
+    remaining = list(available)
+    remaining.remove(player)
+    random.shuffle(options)
+
+    for opponent in options:
+        next_remaining = remaining[:]
+        next_remaining.remove(opponent)
+        updated_used = set(used_pairs)
+        if player is not None and opponent is not None:
+            updated_used.add(frozenset({player, opponent}))
+        updated_matches = matches + [(player, opponent)]
+        attempt = _match_week(tuple(next_remaining), updated_used, updated_matches)
+        if attempt is not None:
+            return attempt
+    return None
+
+
+def generate_reseeded_weeks(player_ids, existing_pairs, weeks_needed, max_attempts=200):
+    if weeks_needed <= 0:
+        return []
+    roster = list(player_ids)
+    if len(roster) < 2:
+        return [[] for _ in range(weeks_needed)]
+
+    for _ in range(max_attempts):
+        used_pairs = set(existing_pairs)
+        schedule = []
+        success = True
+        random.shuffle(roster)
+        for _ in range(weeks_needed):
+            week_matches = _build_week_matching(roster, used_pairs)
+            if week_matches is None:
+                success = False
+                break
+            schedule.append(week_matches)
+            for player1, player2 in week_matches:
+                if player1 is not None and player2 is not None:
+                    used_pairs.add(frozenset({player1, player2}))
+        if success:
+            return schedule
+    return None
 
 
 def get_current_week(db):
@@ -1056,17 +1228,63 @@ def signup():
             return redirect(url_for("signup"))
 
         db.execute(
-            "INSERT INTO players (first_name, last_name, cec_id, created_at) VALUES (%s, %s, %s, %s)",
-            (first_name, last_name, cec_id, datetime.now(timezone.utc)),
+            "INSERT INTO players (first_name, last_name, cec_id, created_at, approved) VALUES (%s, %s, %s, %s, %s)",
+            (first_name, last_name, cec_id, datetime.now(timezone.utc), False),
         )
         db.commit()
-        flash("Player registered successfully.", "success")
+        flash(
+            "Signup received! Pending admin approval before you appear on the roster.",
+            "info",
+        )
         return redirect(url_for("signup"))
 
     players = db.execute(
-        "SELECT id, first_name, last_name, cec_id, created_at FROM players ORDER BY created_at ASC"
+        "SELECT id, first_name, last_name, cec_id, created_at FROM players WHERE approved = TRUE ORDER BY created_at ASC"
     ).fetchall()
     return render_template("signup.html", players=players)
+
+
+@app.route("/admin/reseed_regular_season", methods=["POST"])
+@admin_required
+def admin_reseed_regular_season():
+    db = get_db()
+
+    player_ids = collect_active_player_ids(db)
+    if len(player_ids) < 2:
+        flash("Need at least two approved players to reseed the schedule.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    if _future_regular_weeks_have_scores(db):
+        flash(
+            "Cannot reseed: matches in weeks 2+ already have reported scores.", "error"
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    players_with_week_one, existing_pairs = _load_week_one_metadata(db)
+    success, message, category = _ensure_week_one_coverage(
+        db, player_ids, players_with_week_one, existing_pairs
+    )
+    if not success:
+        flash(message, category or "error")
+        return redirect(url_for("admin_dashboard"))
+    if message and category:
+        flash(message, category)
+
+    current_week = get_current_week(db)
+    future_start = max(2, current_week + 1)
+    matches_removed, schedules_removed = _clear_future_regular_weeks(db, future_start)
+
+    if matches_removed or schedules_removed:
+        flash(
+            f"Cleared future weeks starting at Week {future_start}. New matchups will go live as each week begins.",
+            "success",
+        )
+    else:
+        flash(
+            "Upcoming weeks were already clear. New opponents will be generated as each week starts.",
+            "info",
+        )
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/schedule")
@@ -1694,7 +1912,10 @@ def admin_dashboard():
     current_week = get_current_week(db)
     current_playoff_round = get_current_playoff_round(db)
     players = db.execute(
-        "SELECT id, first_name, last_name, cec_id FROM players ORDER BY created_at ASC"
+        "SELECT id, first_name, last_name, cec_id, created_at FROM players WHERE approved = TRUE ORDER BY created_at ASC"
+    ).fetchall()
+    pending_players = db.execute(
+        "SELECT id, first_name, last_name, cec_id, created_at FROM players WHERE approved = FALSE ORDER BY created_at ASC"
     ).fetchall()
     rows = db.execute(
         """
@@ -1713,6 +1934,15 @@ def admin_dashboard():
             current_playoff_round=current_playoff_round,
         )
         for row in rows
+    ]
+
+    regular_match_options = [
+        {
+            "id": match["id"],
+            "label": f"Week {match['week']}: {match.get('player1_name') or 'TBD'} vs {('BYE' if match.get('player2_id') is None else (match.get('player2_name') or 'TBD'))} (Match {match['id']})",
+        }
+        for match in matches
+        if not match["playoff"] and match.get("week")
     ]
 
     # Check if we can start playoffs
@@ -1753,7 +1983,9 @@ def admin_dashboard():
     return render_template(
         "admin.html",
         players=players,
+        pending_players=pending_players,
         matches=matches,
+        regular_match_options=regular_match_options,
         current_week=current_week,
         max_weeks=MAX_WEEKS,
         can_start_playoffs=can_start_playoffs,
@@ -1761,6 +1993,301 @@ def admin_dashboard():
         current_playoff_round=current_playoff_round,
         current_playoff_label=active_playoff_label,
     )
+
+
+@app.route("/admin/player/<int:player_id>/approve", methods=["POST"])
+@admin_required
+def admin_approve_player(player_id):
+    db = get_db()
+    player = db.execute(PLAYER_APPROVAL_QUERY, (player_id,)).fetchone()
+    if not player:
+        flash("Player not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+    if player["approved"]:
+        flash(f"{format_player_name(player)} is already approved.", "info")
+        return redirect(url_for("admin_dashboard"))
+
+    db.execute(
+        "UPDATE players SET approved = TRUE, approved_at = %s WHERE id = %s",
+        (datetime.now(timezone.utc), player_id),
+    )
+    db.commit()
+    flash(f"Approved {format_player_name(player)}.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/player/<int:player_id>/reject", methods=["POST"])
+@admin_required
+def admin_reject_player(player_id):
+    db = get_db()
+    player = db.execute(PLAYER_APPROVAL_QUERY, (player_id,)).fetchone()
+    if not player:
+        flash("Player not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+    if player["approved"]:
+        flash(
+            f"{format_player_name(player)} is already approved. Use delete if removal is required.",
+            "error",
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    db.execute("DELETE FROM players WHERE id = %s", (player_id,))
+    db.commit()
+    flash(f"Rejected signup for {format_player_name(player)}.", "info")
+    return redirect(url_for("admin_dashboard"))
+
+
+def _load_and_validate_players(db, player_ids):
+    records = {}
+    for pid in filter(None, player_ids):
+        row = db.execute(PLAYER_APPROVAL_QUERY, (pid,)).fetchone()
+        if not row:
+            return {}, f"Player with id {pid} not found."
+        if not row["approved"]:
+            return {}, f"{format_player_name(row)} is still pending approval."
+        records[pid] = row
+    return records, None
+
+
+def _reset_match_and_assign_players(db, match_id, player1_id, player2_id):
+    db.execute(
+        """
+        UPDATE matches
+        SET player1_id = %s,
+            player2_id = %s,
+            score1 = NULL,
+            score2 = NULL,
+            game1_score1 = NULL,
+            game1_score2 = NULL,
+            game2_score1 = NULL,
+            game2_score2 = NULL,
+            game3_score1 = NULL,
+            game3_score2 = NULL,
+            reported = 0,
+            double_forfeit = 0
+        WHERE id = %s
+        """,
+        (player1_id, player2_id, match_id),
+    )
+    db.execute("DELETE FROM match_schedules WHERE match_id = %s", (match_id,))
+
+
+@app.route("/admin/match/assign", methods=["POST"])
+@admin_required
+def admin_assign_match_players():
+    db = get_db()
+    match_raw = request.form.get("match_id", "").strip()
+    if not match_raw:
+        flash("Select a match to update.", "error")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        match_id = int(match_raw)
+    except ValueError:
+        flash("Invalid match selection.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    match = db.execute(
+        "SELECT id, week, playoff FROM matches WHERE id = %s",
+        (match_id,),
+    ).fetchone()
+    if not match:
+        flash("Match not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+    if match["playoff"]:
+        flash("Playoff matches must be managed from the playoff bracket.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_raw = request.form.get("player1_id", "").strip()
+    player2_raw = request.form.get("player2_id", "").strip()
+    if not player1_raw:
+        flash("Player 1 is required.", "error")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        player1_id = int(player1_raw)
+    except ValueError:
+        flash("Invalid Player 1 selection.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player2_id = None
+    if player2_raw:
+        try:
+            player2_id = int(player2_raw)
+        except ValueError:
+            flash("Invalid Player 2 selection.", "error")
+            return redirect(url_for("admin_dashboard"))
+
+    if player2_id and player1_id == player2_id:
+        flash("A player cannot face themselves.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player_records, error_message = _load_and_validate_players(
+        db, [player1_id, player2_id]
+    )
+    if error_message:
+        flash(error_message, "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_record = player_records.get(player1_id)
+    player2_record = player_records.get(player2_id) if player2_id else None
+    if not player1_record:
+        flash("Player 1 must be approved before assignment.", "error")
+        return redirect(url_for("admin_dashboard"))
+    if player2_id and not player2_record:
+        flash("Player 2 must be approved before assignment.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    week = match["week"]
+    if week is not None:
+        if player_has_week_match(db, player1_id, week, exclude_match_id=match_id):
+            flash(
+                f"{format_player_name(player1_record)} already has a Week {week} match.",
+                "error",
+            )
+            return redirect(url_for("admin_dashboard"))
+        if player2_id and player_has_week_match(
+            db, player2_id, week, exclude_match_id=match_id
+        ):
+            flash(
+                f"{format_player_name(player2_record)} already has a Week {week} match.",
+                "error",
+            )
+            return redirect(url_for("admin_dashboard"))
+
+    if matchup_already_exists(db, player1_id, player2_id, exclude_match_id=match_id):
+        flash("These players already face each other elsewhere in the season.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        _reset_match_and_assign_players(db, match_id, player1_id, player2_id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        flash(f"Could not update match: {exc}", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_name = format_player_name(player1_record)
+    if player2_id:
+        player2_name = format_player_name(player2_record)
+        flash(
+            f"Match {match_id} updated: {player1_name} vs {player2_name}.",
+            "success",
+        )
+    else:
+        flash(f"Match {match_id} updated: {player1_name} receives a bye.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/match/create", methods=["POST"])
+@admin_required
+def admin_create_match():
+    db = get_db()
+    week_raw = request.form.get("week", "").strip()
+    try:
+        week = int(week_raw)
+    except ValueError:
+        flash("Invalid week selection.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    if week < 1 or week > MAX_WEEKS:
+        flash(f"Week must be between 1 and {MAX_WEEKS}.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_raw = request.form.get("player1_id", "").strip()
+    if not player1_raw:
+        flash("Player 1 is required.", "error")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        player1_id = int(player1_raw)
+    except ValueError:
+        flash("Invalid Player 1 selection.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player2_id = None
+    player2_raw = request.form.get("player2_id", "").strip()
+    if player2_raw:
+        try:
+            player2_id = int(player2_raw)
+        except ValueError:
+            flash("Invalid Player 2 selection.", "error")
+            return redirect(url_for("admin_dashboard"))
+
+    if player2_id and player1_id == player2_id:
+        flash("A player cannot face themselves.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player_records, error_message = _load_and_validate_players(
+        db, [player1_id, player2_id]
+    )
+    if error_message:
+        flash(error_message, "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_record = player_records.get(player1_id)
+    player2_record = player_records.get(player2_id) if player2_id else None
+    if not player1_record:
+        flash("Player 1 must be approved before creating a match.", "error")
+        return redirect(url_for("admin_dashboard"))
+    if player2_id and not player2_record:
+        flash("Player 2 must be approved before creating a match.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    if player_has_week_match(db, player1_id, week):
+        flash(
+            f"{format_player_name(player1_record)} already has a Week {week} match.",
+            "error",
+        )
+        return redirect(url_for("admin_dashboard"))
+    if player2_id and player_has_week_match(db, player2_id, week):
+        flash(
+            f"{format_player_name(player2_record)} already has a Week {week} match.",
+            "error",
+        )
+        return redirect(url_for("admin_dashboard"))
+
+    if matchup_already_exists(db, player1_id, player2_id):
+        flash("These players already face each other elsewhere in the season.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        cursor = db.execute(
+            """
+            INSERT INTO matches (
+                week,
+                player1_id,
+                player2_id,
+                score1,
+                score2,
+                reported,
+                double_forfeit,
+                playoff,
+                playoff_round,
+                created_at
+            )
+            VALUES (%s, %s, %s, NULL, NULL, 0, 0, 0, NULL, %s)
+            RETURNING id
+            """,
+            (week, player1_id, player2_id, datetime.now(timezone.utc)),
+        )
+        new_match_id = cursor.fetchone()["id"]
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        flash(f"Could not create match: {exc}", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    player1_name = format_player_name(player1_record)
+    if player2_id:
+        player2_name = format_player_name(player2_record)
+        flash(
+            f"Created Week {week} match {new_match_id}: {player1_name} vs {player2_name}.",
+            "success",
+        )
+    else:
+        flash(
+            f"Created Week {week} match {new_match_id}: {player1_name} has a bye.",
+            "success",
+        )
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/generate_schedule", methods=["POST"])
@@ -1787,7 +2314,11 @@ def admin_generate_schedule():
             )
             return redirect(url_for("admin_dashboard"))
 
-    generate_weekly_schedule(db)
+    success, error_message = generate_weekly_schedule(db)
+    if not success:
+        flash(error_message or "Unable to regenerate schedule.", "error")
+        return redirect(url_for("admin_dashboard"))
+
     flash("Regular season schedule regenerated and reset to Week 1.", "success")
     return redirect(url_for("admin_dashboard"))
 
@@ -1798,9 +2329,9 @@ def admin_force_playoffs():
     db = get_db()
 
     # Check if there are enough players
-    player_count = db.execute("SELECT COUNT(*) as count FROM players").fetchone()[
-        "count"
-    ]
+    player_count = db.execute(
+        "SELECT COUNT(*) as count FROM players WHERE approved = TRUE"
+    ).fetchone()["count"]
     if player_count < 2:
         flash("Need at least 2 players to generate playoff bracket.", "error")
         return redirect(url_for("admin_dashboard"))
@@ -2043,9 +2574,8 @@ def admin_update_week():
         flash(f"Week must be between 1 and {MAX_WEEKS}.", "error")
         return redirect(url_for("admin_dashboard"))
 
-    # Check if this will cause mass forfeits
+    matches_to_forfeit = 0
     if new_week > current_week:
-        # Count how many matches will be auto-forfeited
         matches_to_forfeit = db.execute(
             """
             SELECT COUNT(*) as count FROM matches
@@ -2058,47 +2588,37 @@ def admin_update_week():
             """,
             (current_week, new_week),
         ).fetchone()["count"]
-
-        if matches_to_forfeit > 0:
-            # Require confirmation for mass forfeits
-            confirmation = request.form.get("confirm_week_jump")
-            if confirmation != "yes":
-                flash(
-                    f"⚠️ WARNING: Advancing from Week {current_week} to Week {new_week} will AUTO-FORFEIT {matches_to_forfeit} unreported match(es). Use the confirmation checkbox to proceed.",
-                    "error",
-                )
-                return redirect(url_for("admin_dashboard"))
+        if matches_to_forfeit > 0 and request.form.get("confirm_week_jump") != "yes":
+            flash(
+                f"⚠️ WARNING: Advancing from Week {current_week} to Week {new_week} will AUTO-FORFEIT {matches_to_forfeit} unreported match(es). Use the confirmation checkbox to proceed.",
+                "error",
+            )
+            return redirect(url_for("admin_dashboard"))
 
     forfeited = 0
+    generated_weeks = []
     if new_week > current_week:
-        cursor = db.execute(
-            """
-            UPDATE matches
-            SET reported = 1,
-                double_forfeit = 1,
-                score1 = 0,
-                score2 = 0,
-                game1_score1 = NULL,
-                game1_score2 = NULL,
-                game2_score1 = NULL,
-                game2_score2 = NULL,
-                game3_score1 = NULL,
-                game3_score2 = NULL
-            WHERE playoff = 0
-              AND week IS NOT NULL
-              AND week >= %s
-              AND week < %s
-              AND player2_id IS NOT NULL
-              AND (reported = 0 OR reported IS NULL)
-            """,
-            (current_week, new_week),
+        success, forfeited, generated_weeks, generation_error = (
+            _advance_regular_season_weeks(db, current_week, new_week)
         )
-        forfeited = cursor.rowcount
+        if not success:
+            db.rollback()
+            flash(generation_error, "error")
+            return redirect(url_for("admin_dashboard"))
     set_current_week(db, new_week)
     db.commit()
     flash(f"Current week set to {new_week}.", "success")
     if forfeited:
         flash(f"Auto-forfeited {forfeited} unreported matches.", "error")
+    if generated_weeks:
+        if len(generated_weeks) == 1:
+            flash(
+                f"Week {generated_weeks[0]} matchups generated and published.",
+                "info",
+            )
+        else:
+            week_labels = ", ".join(str(week) for week in generated_weeks)
+            flash(f"Weeks {week_labels} matchups generated and published.", "info")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -2221,7 +2741,7 @@ def fetch_ranked_matches(db, include_playoffs):
 
 def calculate_rankings(db, include_playoffs=True):
     players = db.execute(
-        "SELECT id, first_name, last_name FROM players ORDER BY first_name, last_name"
+        "SELECT id, first_name, last_name FROM players WHERE approved = TRUE ORDER BY first_name, last_name"
     ).fetchall()
     if not players:
         return []
@@ -2257,30 +2777,264 @@ def calculate_rankings(db, include_playoffs=True):
 
 
 def generate_weekly_schedule(db):
-    players = db.execute("SELECT id FROM players ORDER BY created_at ASC").fetchall()
-    player_ids = [player["id"] for player in players]
+    player_ids = collect_active_player_ids(db)
+    db.execute("DELETE FROM match_schedules WHERE week IS NOT NULL")
     db.execute("DELETE FROM matches WHERE playoff = 0")
-    db.commit()
-    if len(player_ids) < 2:
-        return
-
-    schedule = build_round_robin(player_ids, MAX_WEEKS)
-    now = datetime.now(timezone.utc)
-    for week_index, matches in enumerate(schedule, start=1):
-        for p1, p2 in matches:
-            is_bye = p2 is None
-            score1 = 0 if is_bye else None
-            score2 = 0 if is_bye else None
-            reported_flag = 1 if is_bye else 0
-            db.execute(
-                """
-                INSERT INTO matches (week, player1_id, player2_id, score1, score2, reported, playoff, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
-                """,
-                (week_index, p1, p2, score1, score2, reported_flag, now),
-            )
     set_current_week(db, 1)
+
+    success, _, error_message = ensure_regular_week_generated(
+        db, 1, player_ids=player_ids
+    )
+
+    if not success:
+        db.rollback()
+        return False, error_message
+
     db.commit()
+    return True, None
+
+
+def collect_active_player_ids(db):
+    rows = db.execute(
+        "SELECT id FROM players WHERE approved = TRUE ORDER BY created_at ASC"
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def _regular_week_exists(db, target_week):
+    return (
+        db.execute(
+            "SELECT 1 FROM matches WHERE playoff = 0 AND week = %s LIMIT 1",
+            (target_week,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _collect_existing_pairs(db, roster_set):
+    rows = db.execute(
+        """
+        SELECT player1_id, player2_id FROM matches
+        WHERE playoff = 0
+          AND player1_id IS NOT NULL
+          AND player2_id IS NOT NULL
+        """
+    ).fetchall()
+    return {
+        frozenset({row["player1_id"], row["player2_id"]})
+        for row in rows
+        if row["player1_id"] in roster_set and row["player2_id"] in roster_set
+    }
+
+
+def _persist_generated_week(db, target_week, matches):
+    now = datetime.now(timezone.utc)
+    inserted = 0
+    for player1_id, player2_id in matches:
+        if player1_id is None and player2_id is None:
+            continue
+
+        is_bye = player2_id is None
+        db.execute(
+            """
+            INSERT INTO matches (
+                week,
+                player1_id,
+                player2_id,
+                score1,
+                score2,
+                reported,
+                double_forfeit,
+                playoff,
+                playoff_round,
+                created_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, 0, 0, NULL, %s)
+            """,
+            (
+                target_week,
+                player1_id,
+                player2_id,
+                0 if is_bye else None,
+                0 if is_bye else None,
+                1 if is_bye else 0,
+                now,
+            ),
+        )
+        inserted += 1
+    return inserted
+
+
+def ensure_regular_week_generated(db, target_week, player_ids=None):
+    if target_week < 1 or target_week > MAX_WEEKS:
+        return False, False, f"Week must be between 1 and {MAX_WEEKS}."
+
+    if _regular_week_exists(db, target_week):
+        return True, False, None
+
+    if player_ids is None:
+        player_ids = collect_active_player_ids(db)
+
+    if len(player_ids) < 2:
+        return (
+            False,
+            False,
+            "Need at least two approved players to generate regular season matches.",
+        )
+
+    roster_set = set(player_ids)
+    existing_pairs = _collect_existing_pairs(db, roster_set)
+
+    generated = generate_reseeded_weeks(player_ids, existing_pairs, weeks_needed=1)
+    if not generated:
+        return (
+            False,
+            False,
+            "Unable to generate a conflict-free schedule for the next week.",
+        )
+
+    inserted = _persist_generated_week(db, target_week, generated[0])
+    if inserted == 0:
+        return False, False, "Generated week contained no matches."
+
+    return True, True, None
+
+
+def ensure_weeks_generated(db, week_numbers, player_ids=None):
+    created = []
+    for week in week_numbers:
+        success, inserted, error_message = ensure_regular_week_generated(
+            db, week, player_ids=player_ids
+        )
+        if not success:
+            return False, created, error_message
+        if inserted:
+            created.append(week)
+    return True, created, None
+
+
+def _advance_regular_season_weeks(db, current_week, new_week):
+    cursor = db.execute(
+        """
+        UPDATE matches
+        SET reported = 1,
+            double_forfeit = 1,
+            score1 = 0,
+            score2 = 0,
+            game1_score1 = NULL,
+            game1_score2 = NULL,
+            game2_score1 = NULL,
+            game2_score2 = NULL,
+            game3_score1 = NULL,
+            game3_score2 = NULL
+        WHERE playoff = 0
+          AND week IS NOT NULL
+          AND week >= %s
+          AND week < %s
+          AND player2_id IS NOT NULL
+          AND (reported = 0 OR reported IS NULL)
+        """,
+        (current_week, new_week),
+    )
+
+    player_ids = collect_active_player_ids(db)
+    success, generated_weeks, error_message = ensure_weeks_generated(
+        db, range(current_week + 1, new_week + 1), player_ids=player_ids
+    )
+    if not success:
+        return False, cursor.rowcount, [], error_message
+
+    return True, cursor.rowcount, generated_weeks, None
+
+
+def _future_regular_weeks_have_scores(db):
+    count = db.execute(
+        "SELECT COUNT(*) as count FROM matches WHERE playoff = 0 AND week > 1 AND reported = 1"
+    ).fetchone()["count"]
+    return count > 0
+
+
+def _load_week_one_metadata(db):
+    rows = db.execute(
+        "SELECT id, player1_id, player2_id FROM matches WHERE playoff = 0 AND week = 1"
+    ).fetchall()
+    players_with_week_one = set()
+    existing_pairs = set()
+    for row in rows:
+        if row["player1_id"]:
+            players_with_week_one.add(row["player1_id"])
+        if row["player2_id"]:
+            players_with_week_one.add(row["player2_id"])
+        if row["player1_id"] and row["player2_id"]:
+            existing_pairs.add(frozenset({row["player1_id"], row["player2_id"]}))
+    return players_with_week_one, existing_pairs
+
+
+def _ensure_week_one_coverage(db, player_ids, players_with_week_one, existing_pairs):
+    missing_players = [pid for pid in player_ids if pid not in players_with_week_one]
+    if not missing_players:
+        return True, None, None
+
+    if len(missing_players) != 2:
+        return (
+            False,
+            "Unexpected number of players missing Week 1 matches. Please resolve manually before reseeding.",
+            "error",
+        )
+
+    new_pair = frozenset(missing_players)
+    if new_pair in existing_pairs:
+        return (
+            False,
+            "Week 1 already contains this pairing. Assign the new players manually before reseeding.",
+            "error",
+        )
+
+    try:
+        db.execute(
+            """
+            INSERT INTO matches (
+                week,
+                player1_id,
+                player2_id,
+                score1,
+                score2,
+                reported,
+                double_forfeit,
+                playoff,
+                playoff_round,
+                created_at
+            )
+            VALUES (1, %s, %s, NULL, NULL, 0, 0, 0, NULL, %s)
+            """,
+            (
+                missing_players[0],
+                missing_players[1],
+                datetime.now(timezone.utc),
+            ),
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return False, f"Could not create Week 1 match for new players: {exc}", "error"
+
+    existing_pairs.add(new_pair)
+    return (
+        True,
+        "Added Week 1 match for newly approved players before reseeding.",
+        "info",
+    )
+
+
+def _clear_future_regular_weeks(db, start_week):
+    schedules_removed = db.execute(
+        "DELETE FROM match_schedules WHERE week >= %s", (start_week,)
+    ).rowcount
+    matches_removed = db.execute(
+        "DELETE FROM matches WHERE playoff = 0 AND week >= %s", (start_week,)
+    ).rowcount
+    db.commit()
+    return matches_removed, schedules_removed
 
 
 def build_round_robin(player_ids, limit_weeks):

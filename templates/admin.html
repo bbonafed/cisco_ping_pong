@@ -54,6 +54,19 @@
 <section class="card">
     <div class="card-header">
         <div>
+            <h3 class="card-title">Reseed Weeks 2+</h3>
+            <p class="card-subtitle">Regenerate the remaining schedule after adding late players. Week 1 stays locked.</p>
+        </div>
+    </div>
+    <form method="post" action="{{ url_for('admin_reseed_regular_season') }}" onsubmit="return confirm('Reseed weeks 2 and beyond with the current approved roster? Existing matches, scores, and calendar holds for those weeks will be deleted.');">
+        <p class="card-meta">Only runs if no Weeks 2-{{ max_weeks }} matches have reported scores. Ensures no duplicate opponents across the season.</p>
+        <button class="btn btn-warning" type="submit">Reseed Remaining Weeks</button>
+    </form>
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
             <h3 class="card-title">Playoff Control</h3>
             <p class="card-subtitle">Manually start playoffs and advance rounds when complete.</p>
             {% if current_playoff_round is not none and current_playoff_round >= 0 %}
@@ -106,10 +119,51 @@
     </div>
 </section>
 
+{% if pending_players %}
 <section class="card">
     <div class="card-header">
         <div>
-            <h3 class="card-title">Registered Players</h3>
+            <h3 class="card-title">Pending Player Approvals</h3>
+            <p class="card-subtitle">Review new signups before they appear on the public roster.</p>
+        </div>
+        <span class="chip chip-warning">{{ pending_players|length }} Waiting</span>
+    </div>
+    <div class="table-wrapper">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>CEC ID</th>
+                    <th>Submitted</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for player in pending_players %}
+                <tr>
+                    <td>{{ player.first_name }} {{ player.last_name }}</td>
+                    <td>{{ player.cec_id }}</td>
+                    <td>{{ player.created_at.strftime('%b %d, %Y %I:%M %p') if player.created_at else 'N/A' }}</td>
+                    <td class="table-actions">
+                        <form method="post" action="{{ url_for('admin_approve_player', player_id=player.id) }}" style="display: inline;">
+                            <button class="btn btn-success btn-small" type="submit">Approve</button>
+                        </form>
+                        <form method="post" action="{{ url_for('admin_reject_player', player_id=player.id) }}" style="display: inline;">
+                            <button class="btn btn-danger btn-small" type="submit" data-confirm="Reject this signup?">Reject</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">Approved Players</h3>
             <p class="card-subtitle">Manage roster and remove inactive entries when needed.</p>
         </div>
         <span class="chip chip-neutral">{{ players|length }} Players</span>
@@ -130,7 +184,7 @@
                     <tr>
                         <td>{{ player.first_name }} {{ player.last_name }}</td>
                         <td>{{ player.cec_id }}</td>
-                        <td>{{ player.created_at }}</td>
+                        <td>{{ player.created_at.strftime('%b %d, %Y %I:%M %p') if player.created_at else 'N/A' }}</td>
                         <td class="table-actions">
                             <form method="post" action="{{ url_for('admin_delete_player', player_id=player.id) }}" onsubmit="return confirm('Delete {{ player.first_name }} {{ player.last_name }}? This may affect match integrity if they have reported matches.');">
                                 <button class="btn btn-danger btn-small" type="submit">Delete</button>
@@ -144,6 +198,94 @@
     {% else %}
         <div class="empty-state">No players registered yet.</div>
     {% endif %}
+</section>
+
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">Manual Match Adjustments</h3>
+            <p class="card-subtitle">Create makeup matches or reassign players without regenerating the schedule.</p>
+        </div>
+    </div>
+    <div class="card-section">
+        <h4 class="tagline-highlight">Update an Existing Match</h4>
+        {% if regular_match_options and players %}
+        <form method="post" action="{{ url_for('admin_assign_match_players') }}" class="form-grid">
+            <div class="form-row inline">
+                <div>
+                    <label for="adjust-match">Match</label>
+                    <select id="adjust-match" name="match_id" required>
+                        <option value="">Select match&hellip;</option>
+                        {% for option in regular_match_options %}
+                            <option value="{{ option.id }}">{{ option.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="adjust-player1">Player 1</label>
+                    <select id="adjust-player1" name="player1_id" required>
+                        <option value="">&mdash; Select Player &mdash;</option>
+                        {% for player in players %}
+                            <option value="{{ player.id }}">{{ player.first_name }} {{ player.last_name }} ({{ player.cec_id }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="adjust-player2">Player 2</label>
+                    <select id="adjust-player2" name="player2_id">
+                        <option value="">&mdash; BYE / Unassigned &mdash;</option>
+                        {% for player in players %}
+                            <option value="{{ player.id }}">{{ player.first_name }} {{ player.last_name }} ({{ player.cec_id }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <p class="card-meta">Scores reset to blank and any reserved calendar slot is cleared when players are reassigned.</p>
+            <button class="btn btn-primary" type="submit">Update Matchup</button>
+        </form>
+        {% else %}
+            <div class="empty-state">No regular-season matches or approved players available for reassignment yet.</div>
+        {% endif %}
+    </div>
+    <div class="card-section">
+        <h4 class="tagline-highlight">Create a New Match</h4>
+        {% if players %}
+        <form method="post" action="{{ url_for('admin_create_match') }}" class="form-grid">
+            <div class="form-row inline">
+                <div>
+                    <label for="create-week">Week</label>
+                    <select id="create-week" name="week" required>
+                        {% for week_no in range(1, max_weeks + 1) %}
+                            <option value="{{ week_no }}">Week {{ week_no }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="create-player1">Player 1</label>
+                    <select id="create-player1" name="player1_id" required>
+                        <option value="">&mdash; Select Player &mdash;</option>
+                        {% for player in players %}
+                            <option value="{{ player.id }}">{{ player.first_name }} {{ player.last_name }} ({{ player.cec_id }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="create-player2">Player 2</label>
+                    <select id="create-player2" name="player2_id">
+                        <option value="">&mdash; BYE / Unassigned &mdash;</option>
+                        {% for player in players %}
+                            <option value="{{ player.id }}">{{ player.first_name }} {{ player.last_name }} ({{ player.cec_id }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <p class="card-meta">Ensure neither player already has a match that week and that this pairing has not occurred earlier in the season.</p>
+            <button class="btn btn-secondary" type="submit">Create Match</button>
+        </form>
+        {% else %}
+            <div class="empty-state">Approve players before creating new matches.</div>
+        {% endif %}
+    </div>
 </section>
 
 <section class="card">

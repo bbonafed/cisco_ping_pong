@@ -31,16 +31,22 @@
                     {% for match in matches %}
                     <tr>
                         <td data-label="Match">
-                            <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
-                                {{ match.player1_name }}
-                            </a>
+                            {% if match.player1_id %}
+                                <a href="{{ url_for('player_profile', player_id=match.player1_id) }}" class="player-link">
+                                    {{ match.player1_name or 'TBD' }}
+                                </a>
+                            {% else %}
+                                <span class="player-link disabled">{{ match.player1_name or 'TBD' }}</span>
+                            {% endif %}
                             vs
                             {% if match.is_bye %}
                                 <strong>BYE</strong>
-                            {% else %}
+                            {% elif match.player2_id %}
                                 <a href="{{ url_for('player_profile', player_id=match.player2_id) }}" class="player-link">
-                                    {{ match.player2_name }}
+                                    {{ match.player2_name or 'TBD' }}
                                 </a>
+                            {% else %}
+                                <span class="player-link disabled">{{ match.player2_name or 'TBD' }}</span>
                             {% endif %}
                         </td>
                         <td data-label="Status">
