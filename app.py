@@ -634,7 +634,7 @@ def format_match_summary(match_row):
     return f"{wins1}-{wins2} ({details})"
 
 
-def build_match_view(match_row, current_week=None, current_playoff_round=None):
+def build_match_view(match_row, current_week=None, current_playoff_round=None, is_admin=False):
     if isinstance(match_row, dict):
         data = dict(match_row)
     else:
@@ -646,6 +646,15 @@ def build_match_view(match_row, current_week=None, current_playoff_round=None):
     totals = aggregate_match_points(match_row)
     data["total_score1"], data["total_score2"] = totals
     is_playoff_match = bool(data.get("playoff"))
+    
+    # Admin can edit any completed match (reported matches that aren't byes)
+    data["admin_can_edit"] = (
+        is_admin 
+        and not data["is_bye"] 
+        and data.get("reported", 0) == 1
+        and data.get("player2_id") is not None
+    )
+    
     if is_playoff_match:
         if current_playoff_round is None:
             current_playoff_round = -1
@@ -1932,6 +1941,7 @@ def admin_dashboard():
             row,
             current_week=current_week,
             current_playoff_round=current_playoff_round,
+            is_admin=True,
         )
         for row in rows
     ]
@@ -2620,6 +2630,87 @@ def admin_update_week():
             week_labels = ", ".join(str(week) for week in generated_weeks)
             flash(f"Weeks {week_labels} matchups generated and published.", "info")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/match/<int:match_id>/edit", methods=["GET", "POST"])
+@admin_required
+def admin_edit_match(match_id):
+    db = get_db()
+    match = db.execute(
+        """
+        SELECT m.*, p1.first_name || ' ' || p1.last_name AS player1_name,
+               p2.first_name || ' ' || p2.last_name AS player2_name
+        FROM matches m
+        LEFT JOIN players p1 ON p1.id = m.player1_id
+        LEFT JOIN players p2 ON p2.id = m.player2_id
+        WHERE m.id = %s
+        """,
+        (match_id,),
+    ).fetchone()
+    
+    if not match:
+        flash("Match not found.", "error")
+        return redirect(url_for("admin_dashboard"))
+    
+    if match["player2_id"] is None:
+        flash("Cannot edit scores for bye matches.", "error")
+        return redirect(url_for("admin_dashboard"))
+    
+    if not match["reported"]:
+        flash("Cannot edit unreported matches. Use regular match reporting instead.", "error")
+        return redirect(url_for("admin_dashboard"))
+
+    if request.method == "POST":
+        try:
+            game_scores = parse_best_of_three_scores(request.form)
+            validate_best_of_three(game_scores)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin_edit_match", match_id=match_id))
+
+        totals = (
+            sum(score[0] for score in game_scores),
+            sum(score[1] for score in game_scores),
+        )
+        padded = game_scores + [(None, None)] * (MAX_GAMES - len(game_scores))
+
+        try:
+            db.execute(
+                """
+                UPDATE matches SET
+                    game1_score1 = %s, game1_score2 = %s,
+                    game2_score1 = %s, game2_score2 = %s,
+                    game3_score1 = %s, game3_score2 = %s,
+                    score1 = %s, score2 = %s,
+                    reported = 1,
+                    double_forfeit = 0
+                WHERE id = %s
+                """,
+                (
+                    padded[0][0], padded[0][1],
+                    padded[1][0], padded[1][1],
+                    padded[2][0], padded[2][1],
+                    totals[0], totals[1],
+                    match_id,
+                ),
+            )
+            db.commit()
+            flash(f"Match scores updated successfully for {match['player1_name']} vs {match['player2_name']}.", "success")
+            return redirect(url_for("admin_dashboard"))
+        except Exception as exc:
+            flash(f"Database error: {exc}", "error")
+            return redirect(url_for("admin_edit_match", match_id=match_id))
+
+    existing_scores = extract_game_scores(match)
+    padded_scores = existing_scores + [(None, None)] * (
+        MAX_GAMES - len(existing_scores)
+    )
+    return render_template(
+        "admin_edit_match.html",
+        match=match,
+        game_scores=padded_scores,
+        max_games=MAX_GAMES,
+    )
 
 
 @app.route("/admin/player/<int:player_id>/delete", methods=["POST"])

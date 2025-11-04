@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Admin: Edit Match{% endblock %}
+
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">Admin: Edit Match Scores</h2>
+            <p class="card-subtitle">{{ match.player1_name }} vs {{ match.player2_name }}</p>
+            {% if match.week %}
+            <p class="card-meta">Week {{ match.week }}{% if match.playoff %} (Playoff){% endif %}</p>
+            {% elif match.playoff %}
+            <p class="card-meta">{{ match.round_name or "Playoff" }} (Round {{ match.playoff_round }})</p>
+            {% endif %}
+        </div>
+        <span class="chip chip-warning">Admin Edit</span>
+    </div>
+    <div class="card-meta" style="margin-bottom: 1rem; padding: 0.75rem; background: rgba(255, 193, 7, 0.1); border-radius: var(--radius-sm); border-left: 3px solid #ffc107;">
+        ⚠️ <strong>Admin Override:</strong> You are editing a previously reported match. This action will update the scores and may affect standings.
+    </div>
+    <form method="post" class="form-grid">
+        <div class="table-wrapper">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Game</th>
+                        <th>{{ match.player1_name }}</th>
+                        <th>{{ match.player2_name }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for idx in range(1, max_games + 1) %}
+                    {% set existing = game_scores[idx-1] if game_scores and game_scores|length >= idx else (None, None) %}
+                    <tr>
+                        <td>Game {{ idx }}</td>
+                        <td>
+                            <input type="number" name="game{{ idx }}_score1" min="0" value="{{ existing[0] if existing[0] is not none else '' }}">
+                        </td>
+                        <td>
+                            <input type="number" name="game{{ idx }}_score2" min="0" value="{{ existing[1] if existing[1] is not none else '' }}">
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="form-note" style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(0, 188, 235, 0.08); border-radius: var(--radius-sm); border-left: 3px solid var(--cisco-cyan);">
+            💡 <strong>Best of Three:</strong> Enter at least two games. The winner must reach two game wins. Leave Game 3 blank if the match ends in two games.
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-primary" type="submit">Update Match Scores</button>
+            <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</section>
+{% endblock %}

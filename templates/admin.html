@@ -333,7 +333,11 @@
                         </td>
                         <td class="table-actions">
                             {% if not match.is_bye %}
-                                <a class="btn btn-secondary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">Edit Score</a>
+                                {% if match.admin_can_edit %}
+                                    <a class="btn btn-warning btn-small" href="{{ url_for('admin_edit_match', match_id=match.id) }}">Admin Edit</a>
+                                {% else %}
+                                    <a class="btn btn-secondary btn-small" href="{{ url_for('report_match', match_id=match.id) }}">{{ 'View' if match.reported else 'Edit Score' }}</a>
+                                {% endif %}
                             {% endif %}
                             <form method="post" action="{{ url_for('admin_delete_match', match_id=match.id) }}" style="display: inline;">
                                 <button class="btn btn-danger btn-small" type="submit" data-confirm="Delete this match? This cannot be undone.">Delete</button>
