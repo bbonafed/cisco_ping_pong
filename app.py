@@ -634,7 +634,9 @@ def format_match_summary(match_row):
     return f"{wins1}-{wins2} ({details})"
 
 
-def build_match_view(match_row, current_week=None, current_playoff_round=None, is_admin=False):
+def build_match_view(
+    match_row, current_week=None, current_playoff_round=None, is_admin=False
+):
     if isinstance(match_row, dict):
         data = dict(match_row)
     else:
@@ -646,15 +648,15 @@ def build_match_view(match_row, current_week=None, current_playoff_round=None, i
     totals = aggregate_match_points(match_row)
     data["total_score1"], data["total_score2"] = totals
     is_playoff_match = bool(data.get("playoff"))
-    
+
     # Admin can edit any completed match (reported matches that aren't byes)
     data["admin_can_edit"] = (
-        is_admin 
-        and not data["is_bye"] 
+        is_admin
+        and not data["is_bye"]
         and data.get("reported", 0) == 1
         and data.get("player2_id") is not None
     )
-    
+
     if is_playoff_match:
         if current_playoff_round is None:
             current_playoff_round = -1
@@ -744,6 +746,33 @@ def label_for_round(round_number, num_matches_in_round=None):
     if round_number == 5:
         return "Finals"
     return f"Round {round_number}"
+
+
+def standard_bracket_seed_order(bracket_size):
+    """Return the canonical seed order for a single-elimination bracket."""
+    if bracket_size <= 0:
+        return []
+
+    order = [1]
+    while len(order) < bracket_size:
+        next_size = len(order) * 2
+        complement = [next_size + 1 - seed for seed in order]
+        interleaved = []
+        for seed, comp in zip(order, complement):
+            interleaved.extend([seed, comp])
+        order = interleaved
+
+    return order[:bracket_size]
+
+
+def standard_bracket_pairings(bracket_size):
+    """Return ordered (seed_a, seed_b) tuples for the first round of the bracket."""
+    pairings = []
+    order = standard_bracket_seed_order(bracket_size)
+    for idx in range(0, len(order), 2):
+        if idx + 1 < len(order):
+            pairings.append((order[idx], order[idx + 1]))
+    return pairings
 
 
 def generate_play_in_matches_metadata(
@@ -847,12 +876,10 @@ def _compute_next_display_index(round_info, next_round, match):
         target_seed = match.get("match_number") or match.get("display_index")
         if not (bracket_size and target_seed):
             return None
-        if target_seed <= bracket_size // 2:
-            target_index = target_seed
-        else:
-            target_index = bracket_size + 1 - target_seed
-        if target_index <= next_round.get("match_count", 0):
-            return target_index
+        pairings = standard_bracket_pairings(bracket_size)
+        for idx, pairing in enumerate(pairings, start=1):
+            if target_seed in pairing:
+                return idx if idx <= next_round.get("match_count", 0) else None
         return None
 
     target_index = (match.get("display_index", 0) + 1) // 2
@@ -909,18 +936,18 @@ def build_playoff_preview(db):
     round_entries = []
 
     if num_players & (num_players - 1) == 0:
-        pair_count = num_players // 2
+        pairings = standard_bracket_pairings(num_players)
         matches = []
 
-        for slot in range(pair_count):
-            p1 = seeds[slot]
-            p2 = seeds[-(slot + 1)]
-            rank1 = player_ranks.get(p1, "?")
-            rank2 = player_ranks.get(p2, "?")
+        for idx, (seed_a, seed_b) in enumerate(pairings, start=1):
+            p1 = seeds[seed_a - 1]
+            p2 = seeds[seed_b - 1]
+            rank1 = player_ranks.get(p1, seed_a)
+            rank2 = player_ranks.get(p2, seed_b)
 
             matches.append(
                 {
-                    "id": f"preview-r1-{slot}",
+                    "id": f"preview-r1-{idx - 1}",
                     "player1_id": p1,
                     "player2_id": p2,
                     "player1_name": f"{rank1}. {names.get(p1, 'TBD')}",
@@ -933,19 +960,19 @@ def build_playoff_preview(db):
                     "total_score1": 0,
                     "total_score2": 0,
                     "playoff_round": 1,
-                    "match_number": slot + 1,
+                    "match_number": idx,
                 }
             )
 
         round_entries.append(
             {
                 "round_number": 1,
-                "label": label_for_round(1, pair_count),
+                "label": label_for_round(1, len(pairings)),
                 "matches": matches,
             }
         )
 
-        current_round_teams = pair_count
+        current_round_teams = len(pairings)
         current_round_number = 2
 
         while current_round_teams > 1:
@@ -1031,12 +1058,9 @@ def build_playoff_preview(db):
             )
 
         round_one_matches = []
-        main_bracket_first_round_matches = target_bracket_size // 2
+        pairings = standard_bracket_pairings(target_bracket_size)
 
-        for match_index in range(1, main_bracket_first_round_matches + 1):
-            seed1 = match_index
-            seed2 = target_bracket_size + 1 - match_index
-
+        for match_index, (seed1, seed2) in enumerate(pairings, start=1):
             match_info_1 = seed_to_play_in.get(seed1)
             match_info_2 = seed_to_play_in.get(seed2)
 
@@ -1079,12 +1103,12 @@ def build_playoff_preview(db):
         round_entries.append(
             {
                 "round_number": 1,
-                "label": label_for_round(1, main_bracket_first_round_matches),
+                "label": label_for_round(1, len(pairings)),
                 "matches": round_one_matches,
             }
         )
 
-        current_round_teams = main_bracket_first_round_matches
+        current_round_teams = len(pairings)
         current_round_number = 2
 
         while current_round_teams > 1:
@@ -2482,16 +2506,20 @@ def admin_advance_playoff_round():
 
         pair_count = len(round_1_matches)
         target_bracket_size = pair_count * 2 if pair_count else 0
+        pairings = (
+            standard_bracket_pairings(target_bracket_size)
+            if target_bracket_size
+            else []
+        )
         updated = False
 
         for match in round_1_matches:
             match_index = match.get("match_number")
             if not match_index:
                 continue
-            seed1 = match_index
-            seed2 = (
-                target_bracket_size + 1 - match_index if target_bracket_size else None
-            )
+            if match_index > len(pairings):
+                continue
+            seed1, seed2 = pairings[match_index - 1]
 
             if match["player1_id"] is None and seed1 in seed_to_winner:
                 db.execute(
@@ -2647,17 +2675,20 @@ def admin_edit_match(match_id):
         """,
         (match_id,),
     ).fetchone()
-    
+
     if not match:
         flash("Match not found.", "error")
         return redirect(url_for("admin_dashboard"))
-    
+
     if match["player2_id"] is None:
         flash("Cannot edit scores for bye matches.", "error")
         return redirect(url_for("admin_dashboard"))
-    
+
     if not match["reported"]:
-        flash("Cannot edit unreported matches. Use regular match reporting instead.", "error")
+        flash(
+            "Cannot edit unreported matches. Use regular match reporting instead.",
+            "error",
+        )
         return redirect(url_for("admin_dashboard"))
 
     if request.method == "POST":
@@ -2687,15 +2718,22 @@ def admin_edit_match(match_id):
                 WHERE id = %s
                 """,
                 (
-                    padded[0][0], padded[0][1],
-                    padded[1][0], padded[1][1],
-                    padded[2][0], padded[2][1],
-                    totals[0], totals[1],
+                    padded[0][0],
+                    padded[0][1],
+                    padded[1][0],
+                    padded[1][1],
+                    padded[2][0],
+                    padded[2][1],
+                    totals[0],
+                    totals[1],
                     match_id,
                 ),
             )
             db.commit()
-            flash(f"Match scores updated successfully for {match['player1_name']} vs {match['player2_name']}.", "success")
+            flash(
+                f"Match scores updated successfully for {match['player1_name']} vs {match['player2_name']}.",
+                "success",
+            )
             return redirect(url_for("admin_dashboard"))
         except Exception as exc:
             flash(f"Database error: {exc}", "error")
@@ -3265,12 +3303,9 @@ def create_playoff_bracket(db):
         )
 
     # Create Round 1 (main bracket first round)
-    main_bracket_first_round_matches = target_bracket_size // 2
+    pairings = standard_bracket_pairings(target_bracket_size)
 
-    for match_index in range(1, main_bracket_first_round_matches + 1):
-        seed1 = match_index
-        seed2 = target_bracket_size + 1 - match_index
-
+    for match_index, (seed1, seed2) in enumerate(pairings, start=1):
         player1_id = seeds[seed1 - 1] if seed1 <= num_byes else None
         player2_id = seeds[seed2 - 1] if seed2 <= num_byes else None
 
@@ -3299,10 +3334,11 @@ def create_playoff_bracket(db):
 
 def create_first_round_matches(db, seeds, playoff_round, created_at):
     """Helper to create first round matches when no play-ins are needed."""
-    pair_count = len(seeds) // 2
-    for slot in range(pair_count):
-        p1 = seeds[slot]
-        p2 = seeds[-(slot + 1)]
+    bracket_size = len(seeds)
+    pairings = standard_bracket_pairings(bracket_size)
+    for match_index, (seed_a, seed_b) in enumerate(pairings, start=1):
+        p1 = seeds[seed_a - 1]
+        p2 = seeds[seed_b - 1]
         db.execute(
             """
             INSERT INTO matches (
@@ -3319,7 +3355,7 @@ def create_first_round_matches(db, seeds, playoff_round, created_at):
             )
             VALUES (NULL, %s, %s, NULL, NULL, 0, 1, %s, %s, %s)
             """,
-            (p1, p2, playoff_round, slot + 1, created_at),
+            (p1, p2, playoff_round, match_index, created_at),
         )
 
 
@@ -3424,14 +3460,16 @@ def advance_playoff_winners(db, _recursion_depth=0):
 
             pair_count = len(round_1_matches)
             target_bracket_size = pair_count * 2
+            pairings = standard_bracket_pairings(target_bracket_size)
             updated = False
 
             for match in round_1_matches:
                 match_index = match.get("match_number")
                 if not match_index:
                     continue
-                seed1 = match_index
-                seed2 = target_bracket_size + 1 - match_index
+                if match_index > len(pairings):
+                    continue
+                seed1, seed2 = pairings[match_index - 1]
 
                 if match["player1_id"] is None:
                     winner_seed1 = seed_to_winner.get(seed1)
